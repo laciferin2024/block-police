@@ -28,7 +28,7 @@ else:
         url=GRAPH_API_URL,
         headers={"Authorization": f"Bearer {API_KEY}"}
     )
-    graphql_client = Client(transport=transport, fetch_schema_from_transport=True)
+    graphql_client = Client(transport=transport, fetch_schema_from_transport=False)
 
 
 async def query_ens_domain(name: str) -> Optional[Dict[str, Any]]:
