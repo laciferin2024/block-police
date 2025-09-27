@@ -11,5 +11,6 @@ dependencies = [
     "mcp",
     "httpx",
     "gql[all]>=3.5.3",
-    "mcp[cli]>=1.9.4"
+    "mcp[cli]>=1.9.4",
+    "hyperon>=0.2.6"
 ]

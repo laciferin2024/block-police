@@ -140,6 +140,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "gql", extra = ["all"] },
     { name = "httpx" },
+    { name = "hyperon" },
     { name = "mcp", extra = ["cli"] },
     { name = "python-dotenv" },
     { name = "uagents" },
@@ -150,6 +151,7 @@ dependencies = [
 requires-dist = [
     { name = "gql", extras = ["all"], specifier = ">=3.5.3" },
     { name = "httpx" },
+    { name = "hyperon", specifier = ">=0.2.6" },
     { name = "mcp" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.9.4" },
     { name = "python-dotenv", specifier = ">=1.1.1" },
@@ -487,6 +489,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/6e/fa/66bd985dd0b7c109a3bcb89272ee0bfb7e2b4d06309ad7b38ff866734b2a/httpx_sse-0.4.1.tar.gz", hash = "sha256:8f44d34414bc7b21bf3602713005c5df4917884f76072479b21f68befa4ea26e", size = 12998 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/25/0a/6269e3473b09aed2dab8aa1a600c70f31f00ae1349bee30658f7e358a159/httpx_sse-0.4.1-py3-none-any.whl", hash = "sha256:cba42174344c3a5b06f255ce65b350880f962d99ead85e776f23c6618a377a37", size = 8054 },
+]
+
+[[package]]
+name = "hyperon"
+version = "0.2.8"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/59/69/031f51aadd9eb33fffb00a19239b591caad1b2187ae3ba97d5b404d5ef92/hyperon-0.2.8-cp312-cp312-macosx_10_9_x86_64.whl", hash = "sha256:9de2b14de278f0fd4e5d151fde226762562a88a3af0189a1803922aa67fcbd89", size = 7178580 },
+    { url = "https://files.pythonhosted.org/packages/23/85/74c54f7fe6f3a5018628edb41fb034e7e7919bc82df0c4958048af6ed6ac/hyperon-0.2.8-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:583e2963a2bb96248271ea9037445a4171ff9a33e45107f8324c9b94e99f385a", size = 7082939 },
+    { url = "https://files.pythonhosted.org/packages/6b/bd/645d5df830afe1a90f2956104879013073fc415a566e4654cdcbe75d9e35/hyperon-0.2.8-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:b079775d4c1793459c9b0b60734bf0af855871b8616db9562fe1b9d1fd46a2f4", size = 6804019 },
+    { url = "https://files.pythonhosted.org/packages/5f/59/9bcdcf3ba62ff334cf103ccba767dedb22204c9ba79cb2d397b6d877b36c/hyperon-0.2.8-cp312-cp312-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:fe4ba3171d3a8a65f28f433cba26a80b0b9fab058841dd42e58a7ca587e618ba", size = 7495797 },
+    { url = "https://files.pythonhosted.org/packages/b7/7c/de506ee22b6ebe21c66369b1ad737f88a81b08ccee8d2edec1329c1090e2/hyperon-0.2.8-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:4eecc22f5dcdd518351890f582de560af3f6b1d83df7d9442790f7b3e50ec8b9", size = 7378805 },
 ]
 
 [[package]]

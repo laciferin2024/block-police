@@ -23,8 +23,10 @@ from mcps import MCPRegistry, MCPCapability, MCPClientConfig
 from mcps.clients.alchemy import AlchemyMCPClient
 from mcps.clients.thegraph import TheGraphMCPClient
 from mcps.clients.hedera import HederaMCPClient
-from mcps.metta.rag import MeTTaRAG
 from mcps.metta.knowledge_base import MeTTaKnowledgeBase
+from mcps.metta.knowledge_graph import BlockchainKnowledgeGraph
+from mcps.metta.enhanced_rag import EnhancedMeTTaRAG
+from mcps.network import network_manager, NetworkType, EVMNetwork, HederaNetwork
 
 # Import additional modules for enhanced processing
 import json
@@ -64,7 +66,9 @@ class MCPManager:
         self._ctx = ctx
         self.registry = MCPRegistry()
         self.rag_engine = None
+        self.knowledge_graph = None
         self._initialized = False
+        self.current_network = None  # Track the currently detected network
 
     async def initialize(self):
         """Initialize and connect all MCP clients"""
@@ -82,8 +86,9 @@ class MCPManager:
         if HEDERA_ACCOUNT_ID and HEDERA_PRIVATE_KEY:
             await self._setup_hedera_client()
 
-        # Initialize RAG engine with blockchain-specific knowledge
+        # Initialize enhanced RAG engine with blockchain-specific knowledge and graph
         knowledge_base = MeTTaKnowledgeBase()
+        self.knowledge_graph = BlockchainKnowledgeGraph("block_police_knowledge")
 
         # Add blockchain-specific knowledge documents
         try:
@@ -99,10 +104,23 @@ class MCPManager:
                 "title": "EVM Fund Tracing",
                 "content": "Fund tracing on EVM chains follows transaction paths across multiple hops to identify potential destinations of crypto assets."
             })
+            knowledge_base.add_document({
+                "title": "Blockchain Networks",
+                "content": "Different blockchain networks have distinct characteristics. Ethereum is the primary EVM chain, while Polygon, Arbitrum and others are Layer 2 solutions with lower fees. Hedera uses a different consensus mechanism called hashgraph."
+            })
+            knowledge_base.add_document({
+                "title": "Token Standards",
+                "content": "ERC-20 is the standard for fungible tokens, while ERC-721 and ERC-1155 are used for non-fungible tokens (NFTs). Hedera uses its own token standard via the Hedera Token Service."
+            })
+            knowledge_base.add_document({
+                "title": "Cross-Chain Operations",
+                "content": "Assets can be bridged between different blockchains using specialized protocols. These bridges maintain liquidity on both chains and facilitate the transfer of tokens across networks."
+            })
         except Exception as e:
             self._ctx.logger.error(f"Error adding knowledge to MeTTa: {e}")
 
-        self.rag_engine = MeTTaRAG(knowledge_base)
+        # Use enhanced RAG with both knowledge base and knowledge graph
+        self.rag_engine = EnhancedMeTTaRAG(knowledge_base, self.knowledge_graph)
 
         self._initialized = True
         return True
@@ -300,6 +318,12 @@ class MCPManager:
 
     async def get_token_metadata(self, address: str, chain: str = "ethereum") -> Dict[str, Any]:
         """Get token metadata using TheGraph Token API"""
+        # Handle network detection
+        if self.current_network and self.current_network.get("network_type") == NetworkType.EVM:
+            network_config = network_manager.get_network_config(self.current_network)
+            chain = network_config.get("name", chain)
+            self._ctx.logger.info(f"Using network {network_manager.format_network_name(chain)} for token metadata")
+
         clients = self.registry.find_clients_with_capability(MCPCapability.TOKEN_METADATA)
 
         if not clients:
@@ -319,6 +343,11 @@ class MCPManager:
 
     async def get_token_holders(self, address: str, limit: int = 10,
                               chain: str = "ethereum") -> Dict[str, Any]:
+        # Handle network detection
+        if self.current_network and self.current_network.get("network_type") == NetworkType.EVM:
+            network_config = network_manager.get_network_config(self.current_network)
+            chain = network_config.get("name", chain)
+            self._ctx.logger.info(f"Using network {network_manager.format_network_name(chain)} for token holders")
         """Get token holders using TheGraph Token API"""
         clients = self.registry.find_clients_with_capability(MCPCapability.TOKEN_BALANCES)
 
@@ -339,6 +368,11 @@ class MCPManager:
 
     async def get_token_transfers(self, address: str, limit: int = 10,
                                chain: str = "ethereum") -> Dict[str, Any]:
+        # Handle network detection
+        if self.current_network and self.current_network.get("network_type") == NetworkType.EVM:
+            network_config = network_manager.get_network_config(self.current_network)
+            chain = network_config.get("name", chain)
+            self._ctx.logger.info(f"Using network {network_manager.format_network_name(chain)} for token transfers")
         """Get token transfers using TheGraph Token API"""
         clients = self.registry.find_clients_with_capability(MCPCapability.TOKEN_TRANSFERS)
 
@@ -359,6 +393,11 @@ class MCPManager:
 
     async def search_tokens(self, query: str, limit: int = 10,
                          chain: str = "ethereum") -> Dict[str, Any]:
+        # Handle network detection
+        if self.current_network and self.current_network.get("network_type") == NetworkType.EVM:
+            network_config = network_manager.get_network_config(self.current_network)
+            chain = network_config.get("name", chain)
+            self._ctx.logger.info(f"Using network {network_manager.format_network_name(chain)} for token search")
         """Search for tokens using TheGraph Token API"""
         # Find clients with TOKEN_METADATA capability (which can search tokens)
         clients = self.registry.find_clients_with_capability(MCPCapability.TOKEN_METADATA)
@@ -380,6 +419,17 @@ class MCPManager:
 
     async def get_hedera_balance(self, account_id: str = None) -> Dict[str, Any]:
         """Get HBAR balance for a Hedera account"""
+        # Handle Hedera network selection
+        hedera_network = HederaNetwork.TESTNET  # Default
+        if self.current_network and self.current_network.get("network_type") == NetworkType.HEDERA:
+            network_config = network_manager.get_network_config(self.current_network)
+            hedera_net = network_config.get("name")
+            for net in HederaNetwork:
+                if net.value == hedera_net:
+                    hedera_network = net
+                    break
+            self._ctx.logger.info(f"Using {network_manager.format_network_name(hedera_network)} for Hedera balance check")
+
         clients = self.registry.find_clients_with_capability(MCPCapability.HEDERA_TOKEN_TRANSFER)
 
         if not clients:
@@ -399,6 +449,17 @@ class MCPManager:
 
     async def get_hedera_token_balances(self, account_id: str = None) -> Dict[str, Any]:
         """Get all token balances for a Hedera account"""
+        # Handle Hedera network selection
+        hedera_network = HederaNetwork.TESTNET  # Default
+        if self.current_network and self.current_network.get("network_type") == NetworkType.HEDERA:
+            network_config = network_manager.get_network_config(self.current_network)
+            hedera_net = network_config.get("name")
+            for net in HederaNetwork:
+                if net.value == hedera_net:
+                    hedera_network = net
+                    break
+            self._ctx.logger.info(f"Using {network_manager.format_network_name(hedera_network)} for Hedera token balances")
+
         clients = self.registry.find_clients_with_capability(MCPCapability.HEDERA_TOKEN_TRANSFER)
 
         if not clients:
@@ -419,6 +480,17 @@ class MCPManager:
     async def create_hedera_token(self, name: str, symbol: str, initial_supply: int,
                                 decimals: int = 2) -> Dict[str, Any]:
         """Create a new fungible token on Hedera"""
+        # Handle Hedera network selection
+        hedera_network = HederaNetwork.TESTNET  # Default
+        if self.current_network and self.current_network.get("network_type") == NetworkType.HEDERA:
+            network_config = network_manager.get_network_config(self.current_network)
+            hedera_net = network_config.get("name")
+            for net in HederaNetwork:
+                if net.value == hedera_net:
+                    hedera_network = net
+                    break
+            self._ctx.logger.info(f"Using {network_manager.format_network_name(hedera_network)} for Hedera token creation")
+
         clients = self.registry.find_clients_with_capability(MCPCapability.HEDERA_TOKEN_CREATE)
 
         if not clients:
@@ -439,6 +511,17 @@ class MCPManager:
     async def transfer_hedera_token(self, token_id: str, to_account: str,
                                   amount: float) -> Dict[str, Any]:
         """Transfer tokens on Hedera"""
+        # Handle Hedera network selection
+        hedera_network = HederaNetwork.TESTNET  # Default
+        if self.current_network and self.current_network.get("network_type") == NetworkType.HEDERA:
+            network_config = network_manager.get_network_config(self.current_network)
+            hedera_net = network_config.get("name")
+            for net in HederaNetwork:
+                if net.value == hedera_net:
+                    hedera_network = net
+                    break
+            self._ctx.logger.info(f"Using {network_manager.format_network_name(hedera_network)} for Hedera token transfer")
+
         clients = self.registry.find_clients_with_capability(MCPCapability.HEDERA_TOKEN_TRANSFER)
 
         if not clients:
@@ -457,12 +540,21 @@ class MCPManager:
             return {"error": f"Failed to transfer token: {str(e)}"}
 
     async def query_with_rag(self, query: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Query the RAG engine for intelligent insights"""
+        """Query the enhanced RAG engine for intelligent insights"""
         if not self.rag_engine:
             return {"error": "RAG engine not initialized"}
 
         try:
-            result = await self.rag_engine.query(query, context)
+            # Determine query type based on context or default to blockchain_investigation
+            query_type = context.get("query_type", "blockchain_investigation")
+
+            # Use the enhanced RAG to get an answer
+            result = await self.rag_engine.query(query, context, query_type)
+
+            # Update knowledge graph with new information from this query
+            if self.knowledge_graph:
+                await self.rag_engine.update_knowledge_from_query(query, context, result)
+
             return result
         except Exception as e:
             self._ctx.logger.error(f"Error querying RAG engine: {e}")
@@ -470,6 +562,17 @@ class MCPManager:
 
     async def create_nft_on_hedera(self, name: str, symbol: str, max_supply: int = None) -> Dict[str, Any]:
         """Create a new NFT collection on Hedera"""
+        # Handle Hedera network selection
+        hedera_network = HederaNetwork.TESTNET  # Default
+        if self.current_network and self.current_network.get("network_type") == NetworkType.HEDERA:
+            network_config = network_manager.get_network_config(self.current_network)
+            hedera_net = network_config.get("name")
+            for net in HederaNetwork:
+                if net.value == hedera_net:
+                    hedera_network = net
+                    break
+            self._ctx.logger.info(f"Using {network_manager.format_network_name(hedera_network)} for Hedera NFT creation")
+
         clients = self.registry.find_clients_with_capability(MCPCapability.HEDERA_NFT_OPERATIONS)
 
         if not clients:
@@ -489,6 +592,17 @@ class MCPManager:
 
     async def mint_nft_on_hedera(self, token_id: str, metadata: str) -> Dict[str, Any]:
         """Mint a new NFT on Hedera"""
+        # Handle Hedera network selection
+        hedera_network = HederaNetwork.TESTNET  # Default
+        if self.current_network and self.current_network.get("network_type") == NetworkType.HEDERA:
+            network_config = network_manager.get_network_config(self.current_network)
+            hedera_net = network_config.get("name")
+            for net in HederaNetwork:
+                if net.value == hedera_net:
+                    hedera_network = net
+                    break
+            self._ctx.logger.info(f"Using {network_manager.format_network_name(hedera_network)} for Hedera NFT minting")
+
         clients = self.registry.find_clients_with_capability(MCPCapability.HEDERA_NFT_OPERATIONS)
 
         if not clients:
@@ -508,6 +622,17 @@ class MCPManager:
 
     async def associate_hedera_token(self, token_id: str, account_id: str = None) -> Dict[str, Any]:
         """Associate a token with an account on Hedera"""
+        # Handle Hedera network selection
+        hedera_network = HederaNetwork.TESTNET  # Default
+        if self.current_network and self.current_network.get("network_type") == NetworkType.HEDERA:
+            network_config = network_manager.get_network_config(self.current_network)
+            hedera_net = network_config.get("name")
+            for net in HederaNetwork:
+                if net.value == hedera_net:
+                    hedera_network = net
+                    break
+            self._ctx.logger.info(f"Using {network_manager.format_network_name(hedera_network)} for Hedera token association")
+
         clients = self.registry.find_clients_with_capability(MCPCapability.HEDERA_TOKEN_ASSOCIATE)
 
         if not clients:
@@ -679,8 +804,21 @@ async def process_blockchain_query(ctx: Context, manager: MCPManager, query: str
     """Process blockchain investigation query"""
     query_lower = query.lower()
 
+    # Detect network from query
+    detected_network = network_manager.identify_network_from_query(query)
+    manager.current_network = detected_network
+    network_type = detected_network.get("network_type")
+    network = detected_network.get("network")
+
+    ctx.logger.info(f"Detected network: {network_manager.format_network_name(network)} (Type: {network_type.value if isinstance(network_type, NetworkType) else network_type})")
+
     # First check if we can use RAG to get a better understanding
-    rag_context = {"query": query, "query_type": "blockchain_investigation"}
+    rag_context = {
+        "query": query,
+        "query_type": "blockchain_investigation",
+        "network": network_manager.format_network_name(network),
+        "network_type": network_type.value if isinstance(network_type, NetworkType) else network_type
+    }
     rag_result = await manager.query_with_rag(query, rag_context)
     if isinstance(rag_result, dict) and "answer" in rag_result and rag_result["answer"].get("result"):
         ctx.logger.info(f"RAG provided insight for query: {query}")
@@ -1005,12 +1143,12 @@ Example: "Associate Hedera token: 0.0.1234"."""
             address = address_match.group(0)
             ctx.logger.info(f"Detected token metadata request for: {address}")
 
-            # Extract chain if specified
-            chain = "ethereum"
-            if "polygon" in query_lower or "matic" in query_lower:
-                chain = "polygon"
-            elif "arbitrum" in query_lower:
-                chain = "arbitrum"
+            # Use the detected network
+            chain = "ethereum"  # Default
+            if manager.current_network and manager.current_network.get("network_type") == NetworkType.EVM:
+                network_config = network_manager.get_network_config(manager.current_network)
+                chain = network_config.get("name", "ethereum")
+                ctx.logger.info(f"Using detected network {chain} for token metadata")
 
             try:
                 metadata = await manager.get_token_metadata(address, chain)
@@ -1060,12 +1198,12 @@ Example: "Get token details for 0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984\""""
             address = address_match.group(0)
             ctx.logger.info(f"Detected token holders request for: {address}")
 
-            # Extract chain if specified
-            chain = "ethereum"
-            if "polygon" in query_lower or "matic" in query_lower:
-                chain = "polygon"
-            elif "arbitrum" in query_lower:
-                chain = "arbitrum"
+            # Use the detected network
+            chain = "ethereum"  # Default
+            if manager.current_network and manager.current_network.get("network_type") == NetworkType.EVM:
+                network_config = network_manager.get_network_config(manager.current_network)
+                chain = network_config.get("name", "ethereum")
+                ctx.logger.info(f"Using detected network {chain} for token holders")
 
             # Extract limit if specified
             limit = 10
@@ -1131,12 +1269,12 @@ Example: "Get top holders for 0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984\""""
             address = address_match.group(0)
             ctx.logger.info(f"Detected token transfers request for: {address}")
 
-            # Extract chain if specified
-            chain = "ethereum"
-            if "polygon" in query_lower or "matic" in query_lower:
-                chain = "polygon"
-            elif "arbitrum" in query_lower:
-                chain = "arbitrum"
+            # Use the detected network
+            chain = "ethereum"  # Default
+            if manager.current_network and manager.current_network.get("network_type") == NetworkType.EVM:
+                network_config = network_manager.get_network_config(manager.current_network)
+                chain = network_config.get("name", "ethereum")
+                ctx.logger.info(f"Using detected network {chain} for token transfers")
 
             # Extract limit if specified
             limit = 10
@@ -1206,12 +1344,12 @@ Example: "Get token transfers for 0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984\"""
             search_term = search_match.group(1).strip()
             ctx.logger.info(f"Detected token search request for: {search_term}")
 
-            # Extract chain if specified
-            chain = "ethereum"
-            if "polygon" in query_lower or "matic" in query_lower:
-                chain = "polygon"
-            elif "arbitrum" in query_lower:
-                chain = "arbitrum"
+            # Use the detected network
+            chain = "ethereum"  # Default
+            if manager.current_network and manager.current_network.get("network_type") == NetworkType.EVM:
+                network_config = network_manager.get_network_config(manager.current_network)
+                chain = network_config.get("name", "ethereum")
+                ctx.logger.info(f"Using detected network {chain} for token search")
 
             try:
                 results = await manager.search_tokens(search_term, 10, chain)
