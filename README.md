@@ -5,7 +5,8 @@ A blockchain investigator agent that can traverse EVM transactions, track stolen
 ## Features
 
 - **Transaction Tracing**: Follow the path of funds across multiple hops to identify exit addresses
-- **Account Analysis**: Get curated assessments about holdings of ENS users or addresses
+- **Account Analysis**: Get curated assessments about holdings of
+  users or addresses
 - **Transaction Details**: Retrieve and analyze transaction data
 - **Direct MCP Integration**: Uses Alchemy MCP server directly without custom implementation
 - **Autonomous Agent Architecture**: Built on uAgents for natural language interaction
@@ -20,6 +21,7 @@ A blockchain investigator agent that can traverse EVM transactions, track stolen
 ## How It Works
 
 This agent uses:
+
 - **Direct Alchemy MCP Integration**: Uses the `@alchemy/mcp-server` NPM package via the MCP client
 - **No Custom API Handling**: All blockchain interactions are handled directly by the MCP server
 - **Fetch.ai Agent Framework**: Provides a chat interface and discovery on Agentverse
@@ -27,18 +29,21 @@ This agent uses:
 ## Installation
 
 1. Clone the repository:
+
 ```bash
 git clone https://github.com/yourusername/block-police.git
 cd block-police
 ```
 
 2. Create and activate a virtual environment:
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 ```
 
 3. Install dependencies:
+
 ```bash
 pip install -r requirements.txt
 ```
@@ -93,10 +98,7 @@ The agent is configured to use the Alchemy MCP server directly, which is launche
   "mcpServers": {
     "alchemy": {
       "command": "npx",
-      "args": [
-        "-y",
-        "@alchemy/mcp-server"
-      ],
+      "args": ["-y", "@alchemy/mcp-server"],
       "env": {
         "ALCHEMY_API_KEY": "YOUR_API_KEY"
       }
