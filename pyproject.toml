@@ -5,12 +5,9 @@ description = "Blockchain investigator agent for tracing EVM transactions"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "hyperon>=0.2.8",
-    "openai>=1.109.1",
     "python-dotenv>=1.1.1",
     "uagents>=0.22.9",
     "uagents-core>=0.3.9",
-    "uagents-adapter",
     "mcp",
     "httpx",
 ]

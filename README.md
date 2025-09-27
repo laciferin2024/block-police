@@ -1,13 +1,14 @@
 # Block Police
 
-A blockchain investigator agent that can traverse EVM transactions, track stolen funds, and monitor blockchain activity using the Alchemy API and Fetch.ai's uAgent framework.
+A blockchain investigator agent that can traverse EVM transactions, track stolen funds, and monitor blockchain activity using direct integration with Alchemy MCP server and Fetch.ai's uAgent framework.
 
 ## Features
 
 - **Transaction Tracing**: Follow the path of funds across multiple hops to identify exit addresses
 - **Account Analysis**: Get curated assessments about holdings of ENS users or addresses
 - **Transaction Details**: Retrieve and analyze transaction data
-- **Autonomous Agent Architecture**: Built on uAgents and MCP integration for natural language interaction
+- **Direct MCP Integration**: Uses Alchemy MCP server directly without custom implementation
+- **Autonomous Agent Architecture**: Built on uAgents for natural language interaction
 
 ## Use Cases
 
@@ -15,6 +16,13 @@ A blockchain investigator agent that can traverse EVM transactions, track stolen
 - **Fund Recovery**: Identify exit addresses where stolen funds are currently held
 - **Monitoring**: Watch specific addresses for suspicious activity
 - **Risk Assessment**: Analyze holdings and transaction patterns for risk evaluation
+
+## How It Works
+
+This agent uses:
+- **Direct Alchemy MCP Integration**: Uses the `@alchemy/mcp-server` NPM package via the MCP client
+- **No Custom API Handling**: All blockchain interactions are handled directly by the MCP server
+- **Fetch.ai Agent Framework**: Provides a chat interface and discovery on Agentverse
 
 ## Installation
 
@@ -36,10 +44,10 @@ pip install -r requirements.txt
 ```
 
 4. Set up your environment variables:
-   - Create or modify the `.env` file with your API keys:
+   - Modify the `.env` file with your API keys:
    ```
    ALCHEMY_API_KEY=your_alchemy_api_key
-   ASI1_API_KEY=your_asi_one_api_key
+   ASI_ONE_API_KEY=your_asi_one_api_key
    ```
 
 ## Usage
@@ -52,14 +60,14 @@ Start the agent:
 python block_police_agent.py
 ```
 
-This will launch the agent and print its address. The agent will be discoverable on the Fetch.ai's Agentverse.
+This will launch the agent and print its address. The agent will be discoverable on Fetch.ai's Agentverse.
 
-### Testing the Agent
+### Testing the Direct MCP Integration
 
-Run the test suite:
+To test the direct MCP integration:
 
 ```bash
-python test_block_police.py
+python test_mcp_direct.py
 ```
 
 ### Example Queries
@@ -72,27 +80,30 @@ Using the agent via ASI:One LLM, you can make natural language queries:
 
 ### Project Structure
 
-- `block_police_agent.py`: Main agent file with MCP server implementation
-- `alchemy_tools.py`: Utility functions for interacting with Alchemy API
-- `test_block_police.py`: Test suite for the agent
+- `block_police_agent.py`: Main agent file with Alchemy MCP client integration
+- `test_mcp_direct.py`: Simple test script for direct MCP interaction
+- `.env`: Environment variables for API keys
 
-## Integration with MeTTa Knowledge Graph
+## Configuration
 
-For advanced reasoning about blockchain transactions and patterns, this agent is designed to work with SingularityNET's MeTTa Knowledge Graph, allowing for:
+The agent is configured to use the Alchemy MCP server directly, which is launched using NPX with:
 
-- Sophisticated pattern recognition across transaction histories
-- Complex reasoning about fund movements and wallet behaviors
-- Context-aware risk assessments
-
-## Development
-
-### Adding New Tools
-
-To add new blockchain investigation tools:
-
-1. Add the method to the `AlchemyTools` class in `alchemy_tools.py`
-2. Expose it via the MCP server by adding a new method to the `AlchemyMCP` class in `block_police_agent.py`
-3. Add appropriate tests in `test_block_police.py`
+```json
+{
+  "mcpServers": {
+    "alchemy": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@alchemy/mcp-server"
+      ],
+      "env": {
+        "ALCHEMY_API_KEY": "YOUR_API_KEY"
+      }
+    }
+  }
+}
+```
 
 ## 🔗 Useful Links
 
@@ -100,4 +111,3 @@ To add new blockchain investigation tools:
 - [Fetch.ai uAgents](https://innovationlab.fetch.ai/resources/docs/examples/chat-protocol/asi-compatible-uagents)
 - [Agentverse](https://agentverse.ai/)
 - [ASI:One](https://asi1.ai/)
-- [MeTTa Documentation](https://metta-lang.dev/docs/learn/tutorials/python_use/metta_python_basics.html)
