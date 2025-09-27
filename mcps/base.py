@@ -31,6 +31,14 @@ class MCPCapability(Enum):
     CALL_CONTRACT = auto()
     ESTIMATE_GAS = auto()
 
+    # Hedera-specific capabilities
+    HEDERA_TOKEN_CREATE = auto()
+    HEDERA_TOKEN_MINT = auto()
+    HEDERA_TOKEN_ASSOCIATE = auto()
+    HEDERA_TOKEN_TRANSFER = auto()
+    HEDERA_NFT_OPERATIONS = auto()
+    HEDERA_AIRDROP = auto()
+
 
 @dataclass
 class MCPClientConfig:

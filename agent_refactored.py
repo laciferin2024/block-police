@@ -22,8 +22,13 @@ from tools import get_registered_tools
 from mcps import MCPRegistry, MCPCapability, MCPClientConfig
 from mcps.clients.alchemy import AlchemyMCPClient
 from mcps.clients.thegraph import TheGraphMCPClient
+from mcps.clients.hedera import HederaMCPClient
 from mcps.metta.rag import MeTTaRAG
 from mcps.metta.knowledge_base import MeTTaKnowledgeBase
+
+# Import additional modules for enhanced processing
+import json
+from datetime import timedelta
 
 # Load environment variables
 load_dotenv()
@@ -40,6 +45,9 @@ ALCHEMY_API_KEY = os.getenv("ALCHEMY_API_KEY")
 GRAPH_MARKET_ACCESS_TOKEN = os.getenv("GRAPH_MARKET_ACCESS_TOKEN")
 ASI_ONE_API_KEY = os.getenv("ASI_ONE_API_KEY")
 THEGRAPH_API_KEY = os.getenv("THEGRAPH_API_KEY")
+HEDERA_ACCOUNT_ID = os.getenv("HEDERA_ACCOUNT_ID")
+HEDERA_PRIVATE_KEY = os.getenv("HEDERA_PRIVATE_KEY")
+HEDERA_NETWORK = os.getenv("HEDERA_NETWORK", "testnet")
 
 if not ALCHEMY_API_KEY:
     raise ValueError("ALCHEMY_API_KEY not found in .env file")
@@ -70,8 +78,31 @@ class MCPManager:
         if GRAPH_MARKET_ACCESS_TOKEN:
             await self._setup_thegraph_client()
 
-        # Initialize RAG engine
-        self.rag_engine = MeTTaRAG(MeTTaKnowledgeBase())
+        # Register and connect Hedera client if credentials available
+        if HEDERA_ACCOUNT_ID and HEDERA_PRIVATE_KEY:
+            await self._setup_hedera_client()
+
+        # Initialize RAG engine with blockchain-specific knowledge
+        knowledge_base = MeTTaKnowledgeBase()
+
+        # Add blockchain-specific knowledge documents
+        try:
+            knowledge_base.add_document({
+                "title": "Hedera Token Service",
+                "content": "Hedera Token Service (HTS) enables the configuration, minting, and management of fungible and non-fungible tokens on the Hedera network without smart contracts."
+            })
+            knowledge_base.add_document({
+                "title": "Hedera Account IDs",
+                "content": "Hedera accounts are identified by a unique account ID in the format of 0.0.X where X is a unique number."
+            })
+            knowledge_base.add_document({
+                "title": "EVM Fund Tracing",
+                "content": "Fund tracing on EVM chains follows transaction paths across multiple hops to identify potential destinations of crypto assets."
+            })
+        except Exception as e:
+            self._ctx.logger.error(f"Error adding knowledge to MeTTa: {e}")
+
+        self.rag_engine = MeTTaRAG(knowledge_base)
 
         self._initialized = True
         return True
@@ -139,6 +170,45 @@ class MCPManager:
                 return False
         except Exception as e:
             self._ctx.logger.error(f"Error connecting to TheGraph MCP server: {e}")
+            return False
+
+    async def _setup_hedera_client(self):
+        """Set up and connect to Hedera MCP server"""
+        self._ctx.logger.info("Setting up Hedera MCP client...")
+
+        # Create and register Hedera client
+        hedera_config = MCPClientConfig(
+            name="hedera",
+            api_key=HEDERA_PRIVATE_KEY,
+            command="npx",
+            args=[
+                "-y",
+                "hedera-mcp",
+                f"--hedera_account_id={HEDERA_ACCOUNT_ID}",
+                f"--hedera_private_key={HEDERA_PRIVATE_KEY}",
+                f"--hedera_network={HEDERA_NETWORK}"
+            ],
+            env_vars={"HEDERA_ACCOUNT_ID": HEDERA_ACCOUNT_ID, "HEDERA_PRIVATE_KEY": HEDERA_PRIVATE_KEY}
+        )
+
+        # Create client through registry
+        hedera_client = self.registry.create_client("hedera", hedera_config)
+
+        if not hedera_client:
+            self._ctx.logger.error("Failed to create Hedera MCP client")
+            return False
+
+        # Connect to Hedera MCP server
+        try:
+            success = await hedera_client.connect()
+            if success:
+                self._ctx.logger.info("Connected to Hedera MCP server")
+                return True
+            else:
+                self._ctx.logger.error("Failed to connect to Hedera MCP server")
+                return False
+        except Exception as e:
+            self._ctx.logger.error(f"Error connecting to Hedera MCP server: {e}")
             return False
 
     async def resolve_ens_to_address(self, ens_name: str) -> str:
@@ -308,6 +378,84 @@ class MCPManager:
 
         return {"error": "Failed to search tokens with any client"}
 
+    async def get_hedera_balance(self, account_id: str = None) -> Dict[str, Any]:
+        """Get HBAR balance for a Hedera account"""
+        clients = self.registry.find_clients_with_capability(MCPCapability.HEDERA_TOKEN_TRANSFER)
+
+        if not clients:
+            return {"error": "No Hedera client available"}
+
+        client = clients[0]
+
+        try:
+            if hasattr(client, "get_hbar_balance"):
+                result = await client.get_hbar_balance(account_id)
+                return result
+            else:
+                return {"error": "Hedera client does not support get_hbar_balance method"}
+        except Exception as e:
+            self._ctx.logger.error(f"Error getting Hedera balance: {e}")
+            return {"error": f"Failed to get HBAR balance: {str(e)}"}
+
+    async def get_hedera_token_balances(self, account_id: str = None) -> Dict[str, Any]:
+        """Get all token balances for a Hedera account"""
+        clients = self.registry.find_clients_with_capability(MCPCapability.HEDERA_TOKEN_TRANSFER)
+
+        if not clients:
+            return {"error": "No Hedera client available"}
+
+        client = clients[0]
+
+        try:
+            if hasattr(client, "get_token_balances"):
+                result = await client.get_token_balances(account_id)
+                return result
+            else:
+                return {"error": "Hedera client does not support get_token_balances method"}
+        except Exception as e:
+            self._ctx.logger.error(f"Error getting Hedera token balances: {e}")
+            return {"error": f"Failed to get token balances: {str(e)}"}
+
+    async def create_hedera_token(self, name: str, symbol: str, initial_supply: int,
+                                decimals: int = 2) -> Dict[str, Any]:
+        """Create a new fungible token on Hedera"""
+        clients = self.registry.find_clients_with_capability(MCPCapability.HEDERA_TOKEN_CREATE)
+
+        if not clients:
+            return {"error": "No Hedera client available"}
+
+        client = clients[0]
+
+        try:
+            if hasattr(client, "create_fungible_token"):
+                result = await client.create_fungible_token(name, symbol, initial_supply, decimals)
+                return result
+            else:
+                return {"error": "Hedera client does not support create_fungible_token method"}
+        except Exception as e:
+            self._ctx.logger.error(f"Error creating Hedera token: {e}")
+            return {"error": f"Failed to create token: {str(e)}"}
+
+    async def transfer_hedera_token(self, token_id: str, to_account: str,
+                                  amount: float) -> Dict[str, Any]:
+        """Transfer tokens on Hedera"""
+        clients = self.registry.find_clients_with_capability(MCPCapability.HEDERA_TOKEN_TRANSFER)
+
+        if not clients:
+            return {"error": "No Hedera client available"}
+
+        client = clients[0]
+
+        try:
+            if hasattr(client, "transfer_token"):
+                result = await client.transfer_token(token_id, to_account, amount)
+                return result
+            else:
+                return {"error": "Hedera client does not support transfer_token method"}
+        except Exception as e:
+            self._ctx.logger.error(f"Error transferring Hedera token: {e}")
+            return {"error": f"Failed to transfer token: {str(e)}"}
+
     async def query_with_rag(self, query: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """Query the RAG engine for intelligent insights"""
         if not self.rag_engine:
@@ -319,6 +467,63 @@ class MCPManager:
         except Exception as e:
             self._ctx.logger.error(f"Error querying RAG engine: {e}")
             return {"error": f"Failed to query RAG engine: {str(e)}"}
+
+    async def create_nft_on_hedera(self, name: str, symbol: str, max_supply: int = None) -> Dict[str, Any]:
+        """Create a new NFT collection on Hedera"""
+        clients = self.registry.find_clients_with_capability(MCPCapability.HEDERA_NFT_OPERATIONS)
+
+        if not clients:
+            return {"error": "No Hedera client available"}
+
+        client = clients[0]
+
+        try:
+            if hasattr(client, "create_nft"):
+                result = await client.create_nft(name, symbol, max_supply)
+                return result
+            else:
+                return {"error": "Hedera client does not support create_nft method"}
+        except Exception as e:
+            self._ctx.logger.error(f"Error creating NFT collection: {e}")
+            return {"error": f"Failed to create NFT collection: {str(e)}"}
+
+    async def mint_nft_on_hedera(self, token_id: str, metadata: str) -> Dict[str, Any]:
+        """Mint a new NFT on Hedera"""
+        clients = self.registry.find_clients_with_capability(MCPCapability.HEDERA_NFT_OPERATIONS)
+
+        if not clients:
+            return {"error": "No Hedera client available"}
+
+        client = clients[0]
+
+        try:
+            if hasattr(client, "mint_nft"):
+                result = await client.mint_nft(token_id, metadata)
+                return result
+            else:
+                return {"error": "Hedera client does not support mint_nft method"}
+        except Exception as e:
+            self._ctx.logger.error(f"Error minting NFT: {e}")
+            return {"error": f"Failed to mint NFT: {str(e)}"}
+
+    async def associate_hedera_token(self, token_id: str, account_id: str = None) -> Dict[str, Any]:
+        """Associate a token with an account on Hedera"""
+        clients = self.registry.find_clients_with_capability(MCPCapability.HEDERA_TOKEN_ASSOCIATE)
+
+        if not clients:
+            return {"error": "No Hedera client available"}
+
+        client = clients[0]
+
+        try:
+            if hasattr(client, "associate_token"):
+                result = await client.associate_token(token_id, account_id)
+                return result
+            else:
+                return {"error": "Hedera client does not support associate_token method"}
+        except Exception as e:
+            self._ctx.logger.error(f"Error associating token: {e}")
+            return {"error": f"Failed to associate token: {str(e)}"}
 
     async def cleanup(self):
         """Clean up all MCP clients"""
@@ -421,6 +626,15 @@ I can help you investigate blockchain transactions, trace funds, and analyze wal
 - Search for tokens
 - Monitor suspicious activities
 
+**Hedera Blockchain Operations:**
+- Get Hedera account balance
+- Get Hedera token balances
+- Create token on Hedera
+- Transfer tokens on Hedera
+- Create NFT on Hedera
+- Mint NFT on Hedera
+- Associate tokens on Hedera
+
 How can I assist with your blockchain investigation today?"""
 
             await ctx.send(sender, create_text_chat(welcome_message))
@@ -465,9 +679,322 @@ async def process_blockchain_query(ctx: Context, manager: MCPManager, query: str
     """Process blockchain investigation query"""
     query_lower = query.lower()
 
-    # Optionally use RAG for more complex queries
-    rag_context = {"query": query}
+    # First check if we can use RAG to get a better understanding
+    rag_context = {"query": query, "query_type": "blockchain_investigation"}
     rag_result = await manager.query_with_rag(query, rag_context)
+    if isinstance(rag_result, dict) and "answer" in rag_result and rag_result["answer"].get("result"):
+        ctx.logger.info(f"RAG provided insight for query: {query}")
+
+    # Check for Hedera token balances queries
+    if any(phrase in query_lower for phrase in ['hedera token balances', 'hedera tokens']):
+        account_id = None
+
+        # Try to extract account ID if provided
+        import re
+        account_match = re.search(r'0\.0\.\d+', query)
+        if account_match:
+            account_id = account_match.group(0)
+
+        ctx.logger.info(f"Detected Hedera token balances request for account: {account_id}")
+
+        result = await manager.get_hedera_token_balances(account_id)
+
+        if isinstance(result, dict) and "error" in result:
+            return f"""❌ **Hedera Token Balances Query Failed**
+
+{result.get('error', 'Unknown error')}
+
+Please verify your Hedera account ID is correct."""
+
+        # Format the result
+        tokens = result.get("tokens", [])
+        account = result.get("account", account_id or "Default account")
+
+        if not tokens:
+            return f"""💰 **Hedera Token Balances**
+
+**Account ID:** {account}
+**Tokens:** No tokens found for this account
+
+*This data is provided by the Hedera network.*"""
+
+        # Format token list
+        token_list = "\n".join([f"**{t.get('tokenId', 'Unknown')}**: {t.get('balance', '0')}" for t in tokens[:10]])
+
+        return f"""💰 **Hedera Token Balances**
+
+**Account ID:** {account}
+**Tokens:** {len(tokens)}
+
+{token_list}
+
+*This data is provided by the Hedera network.*"""
+
+    # Check for Hedera balance queries
+    elif any(phrase in query_lower for phrase in ['hedera balance', 'hbar balance']):
+        account_id = None
+
+        # Try to extract account ID if provided
+        import re
+        account_match = re.search(r'0\.0\.\d+', query)
+        if account_match:
+            account_id = account_match.group(0)
+
+        ctx.logger.info(f"Detected Hedera balance request for account: {account_id}")
+
+        result = await manager.get_hedera_balance(account_id)
+
+        if isinstance(result, dict) and "error" in result:
+            return f"""❌ **Hedera Balance Query Failed**
+
+{result.get('error', 'Unknown error')}
+
+Please verify your Hedera account ID is correct."""
+
+        # Format the result
+        balance = result.get("balance", "0")
+        account = result.get("account", account_id or "Default account")
+
+        return f"""💰 **Hedera Account Balance**
+
+**Account ID:** {account}
+**HBAR Balance:** {balance}
+
+*This data is provided by the Hedera network.*"""
+
+    # Check for Hedera token creation queries
+    elif any(phrase in query_lower for phrase in ['create hedera token', 'create token on hedera']):
+        import re
+
+        # Extract token name, symbol and initial supply
+        name_match = re.search(r'name[d:]?\s+["\']?([^"\']+)["\']?', query_lower)
+        symbol_match = re.search(r'symbol[:]?\s+["\']?([^"\']+)["\']?', query_lower)
+        supply_match = re.search(r'supply[:]?\s+(\d+)', query_lower)
+        decimals_match = re.search(r'decimals[:]?\s+(\d+)', query_lower)
+
+        if name_match and symbol_match and supply_match:
+            name = name_match.group(1)
+            symbol = symbol_match.group(1)
+            initial_supply = int(supply_match.group(1))
+            decimals = int(decimals_match.group(1)) if decimals_match else 2
+
+            ctx.logger.info(f"Creating Hedera token: {name} ({symbol})")
+
+            result = await manager.create_hedera_token(name, symbol, initial_supply, decimals)
+
+            if isinstance(result, dict) and "error" in result:
+                return f"""❌ **Token Creation Failed**
+
+{result.get('error', 'Unknown error')}
+
+Please verify your Hedera credentials and parameters."""
+
+            # Format the result
+            token_id = result.get("tokenId", "Unknown")
+
+            return f"""✅ **Hedera Token Created Successfully**
+
+**Token Name:** {name}
+**Token Symbol:** {symbol}
+**Token ID:** {token_id}
+**Initial Supply:** {initial_supply}
+**Decimals:** {decimals}
+
+Your token has been created on the Hedera network."""
+
+        else:
+            return """⚠️ **Insufficient Token Information**
+
+To create a Hedera token, I need:
+- Token name (e.g., "name: My Token")
+- Token symbol (e.g., "symbol: MTK")
+- Initial supply (e.g., "supply: 1000000")
+- Optional: Decimals (e.g., "decimals: 2") - defaults to 2
+
+Example: "Create a token on Hedera with name: My Token, symbol: MTK, supply: 1000000"."""
+
+    # Check for Hedera token transfer queries
+    elif any(phrase in query_lower for phrase in ['transfer hedera token', 'send hedera token']):
+        import re
+
+        # Extract token ID, recipient and amount
+        token_match = re.search(r'token[:]?\s+([0-9.]+)', query)
+        recipient_match = re.search(r'to[:]?\s+(0\.0\.\d+)', query)
+        amount_match = re.search(r'amount[:]?\s+(\d+(?:\.\d+)?)', query)
+
+        if token_match and recipient_match and amount_match:
+            token_id = token_match.group(1)
+            recipient = recipient_match.group(1)
+            amount = float(amount_match.group(1))
+
+            ctx.logger.info(f"Transferring Hedera token: {token_id} to {recipient}")
+
+            result = await manager.transfer_hedera_token(token_id, recipient, amount)
+
+            if isinstance(result, dict) and "error" in result:
+                return f"""❌ **Token Transfer Failed**
+
+{result.get('error', 'Unknown error')}
+
+Please verify your token ID, recipient account, and amount."""
+
+            # Format the result
+            tx_id = result.get("transactionId", "Unknown")
+
+            return f"""✅ **Hedera Token Transfer Complete**
+
+**Token ID:** {token_id}
+**Recipient:** {recipient}
+**Amount:** {amount}
+**Transaction ID:** {tx_id}
+
+The token transfer has been processed on the Hedera network."""
+
+        else:
+            return """⚠️ **Insufficient Transfer Information**
+
+To transfer a Hedera token, I need:
+- Token ID (e.g., "token: 0.0.1234")
+- Recipient account (e.g., "to: 0.0.5678")
+- Amount to transfer (e.g., "amount: 100")
+
+Example: "Transfer Hedera token: 0.0.1234 to: 0.0.5678 amount: 100"."""
+
+    # Check for Hedera NFT creation queries
+    elif any(phrase in query_lower for phrase in ['create nft on hedera', 'create hedera nft', 'new nft on hedera']):
+        import re
+
+        # Extract NFT collection name and symbol
+        name_match = re.search(r'name[d:]?\s+["\']?([^"\']+)["\']?', query_lower)
+        symbol_match = re.search(r'symbol[:]?\s+["\']?([^"\']+)["\']?', query_lower)
+        supply_match = re.search(r'max[_\s]?supply[:]?\s+(\d+)', query_lower)
+
+        if name_match and symbol_match:
+            name = name_match.group(1)
+            symbol = symbol_match.group(1)
+            max_supply = int(supply_match.group(1)) if supply_match else None
+
+            ctx.logger.info(f"Creating NFT collection on Hedera: {name} ({symbol})")
+
+            result = await manager.create_nft_on_hedera(name, symbol, max_supply)
+
+            if isinstance(result, dict) and "error" in result:
+                return f"""❌ **NFT Collection Creation Failed**
+
+{result.get('error', 'Unknown error')}
+
+Please verify your Hedera credentials and parameters."""
+
+            # Format the result
+            token_id = result.get("tokenId", "Unknown")
+
+            return f"""✅ **Hedera NFT Collection Created Successfully**
+
+**Collection Name:** {name}
+**Collection Symbol:** {symbol}
+**Token ID:** {token_id}
+**Max Supply:** {max_supply if max_supply else "Unlimited"}
+
+Your NFT collection has been created on the Hedera network."""
+
+        else:
+            return """⚠️ **Insufficient NFT Collection Information**
+
+To create a Hedera NFT collection, I need:
+- Collection name (e.g., "name: My NFT Collection")
+- Collection symbol (e.g., "symbol: MNFT")
+- Optional: Maximum supply (e.g., "max_supply: 1000")
+
+Example: "Create an NFT on Hedera with name: My Art Collection, symbol: MAC"."""
+
+    # Check for Hedera NFT minting queries
+    elif any(phrase in query_lower for phrase in ['mint nft on hedera', 'mint hedera nft']):
+        import re
+
+        # Extract token ID and metadata
+        token_match = re.search(r'token[:]?\s+([0-9.]+)', query)
+        metadata_match = re.search(r'metadata[:]?\s+["\']?([^"\']+)["\']?', query)
+
+        if token_match and metadata_match:
+            token_id = token_match.group(1)
+            metadata = metadata_match.group(1)
+
+            ctx.logger.info(f"Minting NFT on Hedera for token: {token_id}")
+
+            result = await manager.mint_nft_on_hedera(token_id, metadata)
+
+            if isinstance(result, dict) and "error" in result:
+                return f"""❌ **NFT Minting Failed**
+
+{result.get('error', 'Unknown error')}
+
+Please verify your token ID and metadata."""
+
+            # Format the result
+            serial_number = result.get("serialNumber", "Unknown")
+            tx_id = result.get("transactionId", "Unknown")
+
+            return f"""✅ **Hedera NFT Minted Successfully**
+
+**Token ID:** {token_id}
+**Serial Number:** {serial_number}
+**Metadata:** {metadata}
+**Transaction ID:** {tx_id}
+
+Your NFT has been minted on the Hedera network."""
+
+        else:
+            return """⚠️ **Insufficient NFT Minting Information**
+
+To mint an NFT on Hedera, I need:
+- Token ID of the NFT collection (e.g., "token: 0.0.1234")
+- Metadata for the NFT (e.g., "metadata: https://example.com/my-nft-metadata.json")
+
+Example: "Mint NFT on Hedera token: 0.0.1234 metadata: ipfs://QmXyZ123..."""
+
+    # Check for Hedera token association queries
+    elif any(phrase in query_lower for phrase in ['associate hedera token', 'associate token on hedera']):
+        import re
+
+        # Extract token ID and account ID
+        token_match = re.search(r'token[:]?\s+([0-9.]+)', query)
+        account_match = re.search(r'account[:]?\s+(0\.0\.\d+)', query)
+
+        if token_match:
+            token_id = token_match.group(1)
+            account_id = account_match.group(1) if account_match else None
+
+            ctx.logger.info(f"Associating token {token_id} with account {account_id if account_id else 'default'}")
+
+            result = await manager.associate_hedera_token(token_id, account_id)
+
+            if isinstance(result, dict) and "error" in result:
+                return f"""❌ **Token Association Failed**
+
+{result.get('error', 'Unknown error')}
+
+Please verify your token ID and account."""
+
+            # Format the result
+            tx_id = result.get("transactionId", "Unknown")
+            account = account_id if account_id else result.get("accountId", "Default account")
+
+            return f"""✅ **Hedera Token Association Complete**
+
+**Token ID:** {token_id}
+**Account:** {account}
+**Transaction ID:** {tx_id}
+
+The token has been associated with the account on the Hedera network."""
+
+        else:
+            return """⚠️ **Insufficient Association Information**
+
+To associate a token on Hedera, I need:
+- Token ID (e.g., "token: 0.0.1234")
+- Optional: Account ID (e.g., "account: 0.0.5678") - uses your default account if not specified
+
+Example: "Associate Hedera token: 0.0.1234"."""
 
     # Check for token metadata queries
     if any(phrase in query_lower for phrase in ['token info', 'token metadata', 'token details']):
@@ -670,10 +1197,10 @@ Example: "Get token transfers for 0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984\"""
     elif any(phrase in query_lower for phrase in ['search token', 'find token', 'lookup token']):
         # Extract search query
         import re
-        search_match = re.search(r'token[s]?\s+(?:for|with|named|called)\s+[\"]?([\w\s]+)[\"]?', query_lower)
+        search_match = re.search(r'token[s]?\s+(?:for|with|named|called)\s+["]?([\w\s]+)["]?', query_lower)
 
         if not search_match:
-            search_match = re.search(r'(?:search|find|lookup)\s+[\"]?([\w\s]+)[\"]?\s+token', query_lower)
+            search_match = re.search(r'(?:search|find|lookup)\s+["]?([\w\s]+)["]?\s+token', query_lower)
 
         if search_match:
             search_term = search_match.group(1).strip()
@@ -998,8 +1525,8 @@ Example: "Analyze transaction 0x123abc..."
 
     # Help message for other queries
     else:
-        # Check if we got a useful RAG response
-        if rag_result and isinstance(rag_result, dict) and "answer" in rag_result and rag_result["answer"].get("result"):
+        # We already tried RAG at the beginning, use the result if it was useful
+        if isinstance(rag_result, dict) and "answer" in rag_result and rag_result["answer"].get("result"):
             answer = rag_result["answer"]
             confidence = rag_result.get("confidence", 0)
 
@@ -1040,6 +1567,15 @@ I can help you investigate blockchain activities. Try one of these queries:
 
 9️⃣ **Search Tokens**
    Example: "Search for tokens named Uniswap"
+
+🔟 **Hedera Operations**
+   Example: "Check Hedera balance for 0.0.12345"
+   Example: "Get Hedera token balances for 0.0.12345"
+   Example: "Create a token on Hedera with name: My Token, symbol: MTK, supply: 1000000"
+   Example: "Transfer Hedera token: 0.0.1234 to: 0.0.5678 amount: 100"
+   Example: "Create NFT on Hedera with name: My Collection, symbol: MCNFT"
+   Example: "Mint NFT on Hedera token: 0.0.1234 metadata: ipfs://QmXyZ123"
+   Example: "Associate Hedera token: 0.0.1234"
 
 Just provide the appropriate address, ENS name, or transaction hash with your query."""
 
