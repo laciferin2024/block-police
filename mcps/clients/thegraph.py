@@ -5,7 +5,8 @@ Integration with TheGraph MCP server for blockchain data access.
 """
 import asyncio
 import mcps
-from mcps.client.sse import sse_client, SseServerParameters
+import mcp
+from mcp.client.sse import sse_client, SseServerParameters
 from contextlib import AsyncExitStack
 from typing import Dict, Any, List, Optional, Set
 import logging

@@ -5,7 +5,8 @@ Integration with Alchemy MCP server for blockchain data access.
 """
 import asyncio
 import mcps
-from mcps.client.stdio import stdio_client, StdioServerParameters
+import mcp
+from mcp.client.stdio import stdio_client, StdioServerParameters
 from contextlib import AsyncExitStack
 from typing import Dict, Any, List, Optional, Set
 import logging
