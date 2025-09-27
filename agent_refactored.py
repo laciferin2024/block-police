@@ -4,7 +4,6 @@ Block Police Agent
 Blockchain investigator agent that can trace EVM transactions,
 analyze wallets, and provide insights using MCP servers.
 """
-import os
 import asyncio
 import json
 import time
@@ -15,8 +14,19 @@ from uuid import uuid4
 from uagents import Agent, Context, Protocol
 from contextlib import AsyncExitStack
 import mcps
-from dotenv import load_dotenv
 from tools import get_registered_tools
+
+# Import centralized configuration
+from config import (
+    ALCHEMY_API_KEY,
+    GRAPH_MARKET_ACCESS_TOKEN,
+    THEGRAPH_API_KEY,
+    ASI_ONE_API_KEY,
+    HEDERA_ACCOUNT_ID,
+    HEDERA_PRIVATE_KEY,
+    HEDERA_NETWORK,
+    THEGRAPH_TOKEN_API_MCP,
+)
 
 # Import MCP client registry and capabilities
 from mcps import MCPRegistry, MCPCapability, MCPClientConfig
@@ -32,9 +42,6 @@ from mcps.network import network_manager, NetworkType, EVMNetwork, HederaNetwork
 import json
 from datetime import timedelta
 
-# Load environment variables
-load_dotenv()
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -43,14 +50,6 @@ logging.basicConfig(
 logger = logging.getLogger("block_police")
 
 # Check for required API keys
-ALCHEMY_API_KEY = os.getenv("ALCHEMY_API_KEY")
-GRAPH_MARKET_ACCESS_TOKEN = os.getenv("GRAPH_MARKET_ACCESS_TOKEN")
-ASI_ONE_API_KEY = os.getenv("ASI_ONE_API_KEY")
-THEGRAPH_API_KEY = os.getenv("THEGRAPH_API_KEY")
-HEDERA_ACCOUNT_ID = os.getenv("HEDERA_ACCOUNT_ID")
-HEDERA_PRIVATE_KEY = os.getenv("HEDERA_PRIVATE_KEY")
-HEDERA_NETWORK = os.getenv("HEDERA_NETWORK", "testnet")
-
 if not ALCHEMY_API_KEY:
     raise ValueError("ALCHEMY_API_KEY not found in .env file")
 
@@ -166,8 +165,7 @@ class MCPManager:
         thegraph_config = MCPClientConfig(
             name="thegraph",
             api_key=GRAPH_MARKET_ACCESS_TOKEN,
-            endpoint=os.getenv("THEGRAPH_TOKEN_API_MCP",
-                              "https://token-api.mcp.thegraph.com/sse")
+            endpoint=THEGRAPH_TOKEN_API_MCP
         )
 
         # Create client through registry

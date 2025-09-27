@@ -10,30 +10,26 @@ import json
 import mcp
 from mcp.clients.stdio import stdio_client
 from contextlib import AsyncExitStack
-import os
-from dotenv import load_dotenv
 from tools.ens import resolve_ens_name, get_domain_details, get_domain_events
 
-# Load environment variables
-load_dotenv()
+# Import centralized configuration
+from config import ALCHEMY_API_KEY, THEGRAPH_API_KEY
 
 # Test domain
 TEST_DOMAIN = "vitalik.eth"
 
-# Get Alchemy API key
-ALCHEMY_API_KEY = os.getenv("ALCHEMY_API_KEY")
+# Check for required API key
 if not ALCHEMY_API_KEY:
-    raise ValueError("ALCHEMY_API_KEY not found in .env file")
+    raise ValueError("ALCHEMY_API_KEY not found in configuration")
 
 async def test_custom_ens_resolution():
     """Test ENS resolution using our custom tools"""
     print("\n=== Testing Custom ENS Resolution Tools ===\n")
 
     # Check if TheGraph API key is configured
-    api_key = os.getenv("THEGRAPH_API_KEY")
-    if not api_key:
-        print("❌ THEGRAPH_API_KEY not found in environment variables")
-        print("Please add your TheGraph API key to the .env file")
+    if not THEGRAPH_API_KEY:
+        print("❌ THEGRAPH_API_KEY not found in configuration")
+        print("Please add your TheGraph API key to the configuration")
         return False
 
     try:
@@ -216,10 +212,9 @@ async def run_tests():
     print("🔍 Starting ENS Integration Tests")
 
     # Check if TheGraph API key is configured
-    api_key = os.getenv("THEGRAPH_API_KEY")
-    if not api_key:
-        print("❌ THEGRAPH_API_KEY not found in environment variables")
-        print("Please add your TheGraph API key to the .env file")
+    if not THEGRAPH_API_KEY:
+        print("❌ THEGRAPH_API_KEY not found in configuration")
+        print("Please add your TheGraph API key to the configuration")
 
         # We can still run the Alchemy tests
         print("Running only Alchemy MCP server tests...")

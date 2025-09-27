@@ -3,16 +3,13 @@ import json
 import mcp
 from mcp.clients.stdio import stdio_client
 from contextlib import AsyncExitStack
-import os
-from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+# Import centralized configuration
+from config import ALCHEMY_API_KEY
 
-# Get Alchemy API key
-ALCHEMY_API_KEY = os.getenv("ALCHEMY_API_KEY")
+# Check for required API key
 if not ALCHEMY_API_KEY:
-    raise ValueError("ALCHEMY_API_KEY not found in .env file")
+    raise ValueError("ALCHEMY_API_KEY not found in configuration")
 
 async def test_alchemy_mcp():
     """Test direct interaction with Alchemy MCP server"""

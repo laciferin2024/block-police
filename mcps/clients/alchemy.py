@@ -3,13 +3,15 @@ Alchemy MCP Client
 
 Integration with Alchemy MCP server for blockchain data access.
 """
-import os
 import asyncio
 import mcps
 from mcps.client.stdio import stdio_client, StdioServerParameters
 from contextlib import AsyncExitStack
 from typing import Dict, Any, List, Optional, Set
 import logging
+
+# Import centralized configuration
+from config import ALCHEMY_API_KEY
 
 from ..base import MCPClient, MCPCapability, MCPClientConfig
 from ..registry import register_mcp_client
@@ -47,7 +49,7 @@ class AlchemyMCPClient(MCPClient):
             params = StdioServerParameters(
                 command="npx",
                 args=["-y", "@alchemy/mcp-server"],
-                env={"ALCHEMY_API_KEY": self.config.api_key or os.getenv("ALCHEMY_API_KEY")}
+                env={"ALCHEMY_API_KEY": self.config.api_key or ALCHEMY_API_KEY}
             )
 
             read_stream, write_stream = await self._exit_stack.enter_async_context(

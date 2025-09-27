@@ -3,13 +3,15 @@ Hedera MCP Client
 
 Integration with Hedera MCP server for blockchain data access and operations.
 """
-import os
 import asyncio
 import mcps
 from mcps.client.stdio import stdio_client, StdioServerParameters
 from contextlib import AsyncExitStack
 from typing import Dict, Any, List, Optional, Set
 import logging
+
+# Import centralized configuration
+from config import HEDERA_ACCOUNT_ID, HEDERA_PRIVATE_KEY, HEDERA_NETWORK
 
 from ..base import MCPClient, MCPCapability, MCPClientConfig
 from ..registry import register_mcp_client
@@ -40,9 +42,9 @@ class HederaMCPClient(MCPClient):
         }
 
         # Extract Hedera configuration
-        self.account_id = os.getenv("HEDERA_ACCOUNT_ID", "")
-        self.private_key = os.getenv("HEDERA_PRIVATE_KEY", "")
-        self.network = os.getenv("HEDERA_NETWORK", "testnet")
+        self.account_id = HEDERA_ACCOUNT_ID or ""
+        self.private_key = HEDERA_PRIVATE_KEY or ""
+        self.network = HEDERA_NETWORK
 
     async def connect(self) -> bool:
         """Connect to Hedera MCP server via local npx execution"""

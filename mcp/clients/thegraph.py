@@ -3,9 +3,11 @@ TheGraph MCP Client
 
 Integration with TheGraph MCP server for blockchain data access.
 """
-import os
 import asyncio
 import mcp
+
+# Import centralized configuration
+from config import GRAPH_MARKET_ACCESS_TOKEN, THEGRAPH_TOKEN_API_MCP
 from mcp.client.sse import sse_client, SseServerParameters
 from contextlib import AsyncExitStack
 from typing import Dict, Any, List, Optional, Set
@@ -37,8 +39,8 @@ class TheGraphMCPClient(MCPClient):
     async def connect(self) -> bool:
         """Connect to TheGraph Token API MCP server via SSE"""
         try:
-            # Get API key from config or environment
-            api_key = self.config.api_key or os.getenv("GRAPH_MARKET_ACCESS_TOKEN")
+            # Get API key from config or centralized config
+            api_key = self.config.api_key or GRAPH_MARKET_ACCESS_TOKEN
 
             if not api_key:
                 logging.error("No TheGraph Market access token available")
@@ -46,8 +48,7 @@ class TheGraphMCPClient(MCPClient):
 
             # Set up TheGraph Token API MCP server connection
             params = SseServerParameters(
-                url=self.config.endpoint or os.getenv("THEGRAPH_TOKEN_API_MCP",
-                                             "https://token-api.mcp.thegraph.com/sse"),
+                url=self.config.endpoint or THEGRAPH_TOKEN_API_MCP,
                 headers={"Authorization": f"Bearer {api_key}"}
             )
 
