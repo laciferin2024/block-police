@@ -6,6 +6,7 @@ Integration with TheGraph MCP server for blockchain data access.
 import os
 import asyncio
 import mcp
+from mcp.client.sse import sse_client, SseServerParameters
 from contextlib import AsyncExitStack
 from typing import Dict, Any, List, Optional, Set
 import logging
@@ -43,9 +44,27 @@ class TheGraphMCPClient(MCPClient):
                 logging.error("No TheGraph Market access token available")
                 return False
 
-            # Stub implementation for now
-            self._tools = []
-            return True
+            # Set up TheGraph Token API MCP server connection
+            params = SseServerParameters(
+                url=self.config.endpoint or os.getenv("THEGRAPH_TOKEN_API_MCP",
+                                             "https://token-api.mcp.thegraph.com/sse"),
+                headers={"Authorization": f"Bearer {api_key}"}
+            )
+
+            # Connect to the MCP server
+            read_stream, write_stream = await self._exit_stack.enter_async_context(
+                sse_client(params)
+            )
+
+            self._session = await self._exit_stack.enter_async_context(
+                mcp.ClientSession(read_stream, write_stream)
+            )
+
+            await self._session.initialize()
+
+            # List available tools
+            result = await self.list_tools()
+            return len(result) > 0
 
         except Exception as e:
             logging.error(f"Failed to connect to TheGraph MCP server: {e}")
@@ -53,12 +72,22 @@ class TheGraphMCPClient(MCPClient):
 
     async def call_tool(self, tool_name: str, params: Any) -> Dict[str, Any]:
         """Call a tool on the TheGraph MCP server"""
-        # Stub implementation
-        return {"error": "MCP client implementation incomplete"}
+        if not self._session:
+            raise RuntimeError("Not connected to TheGraph MCP server")
+
+        result = await self._session.call_tool(tool_name, params)
+
+        if hasattr(result, 'content'):
+            return result.content
+        return {"error": "No content returned"}
 
     async def list_tools(self) -> List[Dict[str, Any]]:
         """List available tools from the TheGraph MCP server"""
-        # Stub implementation
+        if not self._session:
+            raise RuntimeError("Not connected to TheGraph MCP server")
+
+        result = await self._session.list_tools()
+        self._tools = result.tools
         return self._tools
 
     async def get_token_metadata(self, address: str, chain: str = "ethereum") -> Dict[str, Any]:

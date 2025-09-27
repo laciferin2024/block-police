@@ -8,6 +8,7 @@ from uuid import uuid4
 from uagents import Agent, Context, Protocol
 from contextlib import AsyncExitStack
 import mcp
+from mcp.client.stdio import stdio_client, StdioServerParameters
 from dotenv import load_dotenv
 from tools import get_registered_tools
 from tools.ens import resolve_ens_name, get_domain_details, get_domain_events
@@ -42,9 +43,26 @@ class AlchemyMCPClient:
         try:
             self._ctx.logger.info("Connecting to Alchemy MCP server via npx...")
 
-            # Stub implementation for now
-            self._session = None
-            self.tools = []
+            # Use npx to run Alchemy MCP server locally
+            params = StdioServerParameters(
+                command="npx",
+                args=["-y", "@alchemy/mcp-server"],
+                env={"ALCHEMY_API_KEY": ALCHEMY_API_KEY}
+            )
+
+            read_stream, write_stream = await self._exit_stack.enter_async_context(
+                stdio_client(params)
+            )
+
+            self._session = await self._exit_stack.enter_async_context(
+                mcp.ClientSession(read_stream, write_stream)
+            )
+
+            await self._session.initialize()
+
+            # List available tools
+            list_tools_result = await self._session.list_tools()
+            self.tools = list_tools_result.tools
 
             self._ctx.logger.info(f"Connected to Alchemy MCP server with {len(self.tools)} tools")
             for tool in self.tools:

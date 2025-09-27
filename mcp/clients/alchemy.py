@@ -6,6 +6,7 @@ Integration with Alchemy MCP server for blockchain data access.
 import os
 import asyncio
 import mcp
+from mcp.client.stdio import stdio_client, StdioServerParameters
 from contextlib import AsyncExitStack
 from typing import Dict, Any, List, Optional, Set
 
@@ -42,9 +43,26 @@ class AlchemyMCPClient(MCPClient):
             import logging
             logging.info(f"Connecting to Alchemy MCP server with API key: {self.config.api_key}")
 
-            # Stub implementation for now
-            self._tools = []
-            return True
+            # Use npx to run Alchemy MCP server locally
+            params = StdioServerParameters(
+                command="npx",
+                args=["-y", "@alchemy/mcp-server"],
+                env={"ALCHEMY_API_KEY": self.config.api_key or os.getenv("ALCHEMY_API_KEY")}
+            )
+
+            read_stream, write_stream = await self._exit_stack.enter_async_context(
+                stdio_client(params)
+            )
+
+            self._session = await self._exit_stack.enter_async_context(
+                mcp.ClientSession(read_stream, write_stream)
+            )
+
+            await self._session.initialize()
+
+            # List available tools
+            result = await self.list_tools()
+            return len(result) > 0
 
         except Exception as e:
             logging.error(f"Failed to connect to Alchemy MCP server: {e}")
@@ -52,12 +70,22 @@ class AlchemyMCPClient(MCPClient):
 
     async def call_tool(self, tool_name: str, params: Any) -> Dict[str, Any]:
         """Call a tool on the Alchemy MCP server"""
-        # Stub implementation
-        return {"error": "MCP client implementation incomplete"}
+        if not self._session:
+            raise RuntimeError("Not connected to Alchemy MCP server")
+
+        result = await self._session.call_tool(tool_name, params)
+
+        if hasattr(result, 'content'):
+            return result.content
+        return {"error": "No content returned"}
 
     async def list_tools(self) -> List[Dict[str, Any]]:
         """List available tools from the Alchemy MCP server"""
-        # Stub implementation
+        if not self._session:
+            raise RuntimeError("Not connected to Alchemy MCP server")
+
+        result = await self._session.list_tools()
+        self._tools = result.tools
         return self._tools
 
     async def resolve_ens_to_address(self, ens_name: str) -> str:
