@@ -14,16 +14,16 @@ from datetime import datetime, timezone
 from uuid import uuid4
 from uagents import Agent, Context, Protocol
 from contextlib import AsyncExitStack
-import mcp as mcp_lib
+import mcps
 from dotenv import load_dotenv
 from tools import get_registered_tools
 
 # Import MCP client registry and capabilities
-from mcp import MCPRegistry, MCPCapability, MCPClientConfig
-from mcp.clients.alchemy import AlchemyMCPClient
-from mcp.clients.thegraph import TheGraphMCPClient
-from mcp.metta.rag import MeTTaRAG
-from mcp.metta.knowledge_base import MeTTaKnowledgeBase
+from mcps import MCPRegistry, MCPCapability, MCPClientConfig
+from mcps.clients.alchemy import AlchemyMCPClient
+from mcps.clients.thegraph import TheGraphMCPClient
+from mcps.metta.rag import MeTTaRAG
+from mcps.metta.knowledge_base import MeTTaKnowledgeBase
 
 # Load environment variables
 load_dotenv()
