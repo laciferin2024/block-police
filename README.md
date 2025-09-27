@@ -1,276 +1,103 @@
-# Financial Investment Advisor Agent - Fetch.ai Example
+# Block Police
 
-A demonstration of how to integrate **SingularityNET's MeTTa Knowledge Graph** with **Fetch.ai's uAgents** to create intelligent, autonomous agents that can understand and respond to investment queries using structured financial knowledge reasoning.
+A blockchain investigator agent that can traverse EVM transactions, track stolen funds, and monitor blockchain activity using the Alchemy API and Fetch.ai's uAgent framework.
 
-## 🤖 What is MeTTa by SingularityNET?
+## Features
 
-**MeTTa** (Meta Type Talk) is a multi-paradigm language for declarative and functional computations over knowledge (meta)graphs developed by SingularityNET. It provides a powerful framework for:
+- **Transaction Tracing**: Follow the path of funds across multiple hops to identify exit addresses
+- **Account Analysis**: Get curated assessments about holdings of ENS users or addresses
+- **Transaction Details**: Retrieve and analyze transaction data
+- **Autonomous Agent Architecture**: Built on uAgents and MCP integration for natural language interaction
 
-- **Structured Knowledge Representation**: Organize information in logical, queryable formats
-- **Symbolic Reasoning**: Perform complex logical operations and pattern matching
-- **Knowledge Graph Operations**: Build, query, and manipulate knowledge graphs
+## Use Cases
 
-MeTTa uses a space-based architecture where knowledge is stored as atoms in logical spaces, enabling sophisticated querying and reasoning capabilities.
+- **Theft Investigation**: Trace funds stolen from ENS users through multiple hops
+- **Fund Recovery**: Identify exit addresses where stolen funds are currently held
+- **Monitoring**: Watch specific addresses for suspicious activity
+- **Risk Assessment**: Analyze holdings and transaction patterns for risk evaluation
 
-## 🔗 What is Fetch.ai?
+## Installation
 
-**Fetch.ai** provides a complete ecosystem for building, deploying and discovering AI Agents. Key features include:
-
-- **uAgents Framework**: Python-based framework for building autonomous agents
-- **Agentverse**: Open marketplace for agent discovery and interaction
-- **Chat Protocol**: Standardized communication protocol to make agents discoverable through ASI:One
-- **ASI:One**: An agentic LLM that can interact with different agents on Agentverse to answer user queries.
-
-## 🧠 MeTTa Components Explained
-
-### Core MeTTa Elements
-
-#### 1. **Space (Knowledge Container)**
-```python
-metta = MeTTa()  # Creates a new MeTTa instance with a space
-```
-The space is where all knowledge atoms are stored and queried.
-
-#### 2. **Atoms (Knowledge Units)**
-Atoms are the fundamental units of knowledge in MeTTa:
-
-- **E (Expression)**: Creates logical expressions
-- **S (Symbol)**: Represents symbolic atoms
-- **ValueAtom**: Stores actual values (strings, numbers, etc.)
-
-#### 3. **Knowledge Graph Structure**
-```python
-# Risk Profile → Investment Types
-metta.space().add_atom(E(S("risk_profile"), S("conservative"), S("bonds")))
-
-# Investment Types → Expected Returns  
-metta.space().add_atom(E(S("expected_return"), S("bonds"), ValueAtom("3-5% annually")))
-
-# Investment Types → Risk Levels
-metta.space().add_atom(E(S("risk_level"), S("bonds"), ValueAtom("low risk, stable income")))
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/block-police.git
+cd block-police
 ```
 
-#### 4. **Querying with Pattern Matching**
-```python
-# Find investment types for risk profile
-query_str = '!(match &self (risk_profile conservative $investment) $investment)'
-results = metta.run(query_str)
+2. Create and activate a virtual environment:
+```bash
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 ```
 
-### Key MeTTa Concepts
-
-- **`&self`**: References the current space
-- **`$variable`**: Pattern matching variables
-- **`!(match ...)`**: Query syntax for pattern matching
-- **`E(S(...), S(...), ...)`**: Creates logical expressions
-
-For more detailed information about MeTTa, visit the [official documentation](https://metta-lang.dev/docs/learn/tutorials/python_use/metta_python_basics.html).
-
-## 🏗️ Project Architecture
-
-### Core Components
-
-1. **`agent.py`**: Main uAgent implementation with Chat Protocol to make the agent queryable through ASI:One.
-2. **`knowledge.py`**: MeTTa knowledge graph initialization
-3. **`investment_rag.py`**: Investment RAG (Retrieval-Augmented Generation) system
-4. **`utils.py`**: LLM integration and query processing logic
-
-### Data Flow
-
-User Query → Intent Classification → MeTTa Query → Knowledge Retrieval → LLM Response → User
-
-## 🔧 Integration with uAgents
-
-### Using This as a Template
-
-This project serves as a template for integrating MeTTa with uAgents. The key integration point is the `process_query` function in `utils.py`, which you can customize for your specific use case.
-
-### Customization Steps
-
-1. **Modify Knowledge Graph** (`knowledge.py`):
-   ```python
-   def initialize_investment_knowledge(metta: MeTTa):
-       # Add your domain-specific knowledge
-       metta.space().add_atom(E(S("your_relation"), S("subject"), S("object")))
-   ```
-
-2. **Update Query Processing** (`utils.py`):
-   ```python
-   def process_query(query, rag: InvestmentRAG, llm: LLM):
-       # Implement your domain-specific logic
-       intent, keyword = get_intent_and_keyword(query, llm)
-       # Add your custom processing logic here
-   ```
-
-3. **Extend RAG System** (`investment_rag.py`):
-   ```python
-   class InvestmentRAG:
-       def __init__(self, metta_instance: MeTTa):
-           self.metta = metta_instance
-       
-       def query_your_domain(self, query):
-           # Implement your domain-specific queries
-           query_str = f'!(match &self (your_relation {query} $result) $result)'
-           return self.metta.run(query_str)
-   ```
-
-## ⚙️ Setup Instructions
-
-### Prerequisites
-
-- Python 3.11+
-- ASI:One API key
-
-### Installation
-
-1. **Clone the repository**:
-   ```bash
-   git clone <your-repo-url>
-   cd financial-advisor-agent
-   ```
-
-2. **Create virtual environment**:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-
-3. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. **Set up environment variables**:
-    To get the ASI:One API Key, login to https://asi1.ai/ and go to **Developer** section, click on **Create New** and copy your API Key. Please refer this [guide](https://innovationlab.fetch.ai/resources/docs/asione/asi-one-quickstart#step-1-get-your-api-key) for detailed steps.
-
-   ```bash
-   cp .env.example .env
-   # Edit .env with your API keys
-   ```
-
-5. **Run the agent**:
-   ```bash
-   python agent.py
-   ```
-
-### Environment Variables
-
-Create a `.env` file with:
-```env
-ASI_ONE_API_KEY=your_asi_one_api_key_here
+3. Install dependencies:
+```bash
+pip install -r requirements.txt
 ```
 
-## 💡 Key Features
-
-### 1. **Dynamic Knowledge Learning**
-The agent can learn new information and add it to the MeTTa knowledge graph:
-```python
-# Automatically adds new knowledge when not found
-rag.add_knowledge("risk_profile", "ultra_conservative", "treasury_bills")
-```
-
-### 2. **Intent Classification**
-Uses ASI:One to classify user intent and extract keywords:
-- `risk_profile`: Find investments suitable for risk tolerance
-- `investment_advice`: Get investment recommendations
-- `returns`: Learn about expected returns
-- `allocation`: Age-based asset allocation strategies
-- `goal`: Investment strategies for specific goals
-- `sector`: Information about market sectors
-- `faq`: Answer general investment questions
-
-### 3. **Structured Reasoning**
-MeTTa enables complex logical reasoning:
-```python
-# Find investments for risk profile and get their returns
-investments = rag.query_risk_profile("conservative")
-returns = rag.get_expected_return(investments[0])
-risks = rag.get_risk_level(investments[0])
-```
-
-### 4. **Agentverse Integration**
-The agent automatically:
-- Registers on Agentverse for discovery
-- Implements Chat Protocol for ASI:One accessibility
-- Provides a web interface for testing
-
-## 🧪 Testing the Agent
-
-1. **Start the agent**:
-   ```bash
-   python agent.py
+4. Set up your environment variables:
+   - Create or modify the `.env` file with your API keys:
+   ```
+   ALCHEMY_API_KEY=your_alchemy_api_key
+   ASI1_API_KEY=your_asi_one_api_key
    ```
 
-2. **Access the inspector**:
-   Visit the URL shown in the console (e.g., `https://agentverse.ai/inspect/?uri=http%3A//127.0.0.1%3A8008&address=agent1qd674kgs3987yh84a309c0lzkuzjujfufwxslpzygcnwnycjs0ppuauektt`) and click on `Connect` and select the `Mailbox` option. For detailed steps for connecting Agents via Mailbox, please refer [here](https://innovationlab.fetch.ai/resources/docs/agent-creation/uagent-creation#mailbox-agents).
+## Usage
 
-3. **Test queries**:
+### Running the Block Police Agent
 
-### 🎯 Risk Profile & Investment Recommendations
-   - "I'm a conservative investor with low risk tolerance. What should I invest in?"
-   - "I have moderate risk tolerance and want balanced growth. What should I invest in?"
-   - "I'm young and can take high risks for high returns. What should I invest in?"
+Start the agent:
 
-### 💰 Expected Returns & Performance
-   - "What returns can I expect from index funds?"
-   - "How much do bonds typically return per year?"
-   - "What's the expected return on cryptocurrency investments?"
+```bash
+python block_police_agent.py
+```
 
-### 📊 Age-Based Asset Allocation
-   - "I'm 25 years old. How should I allocate my investment portfolio?"
-   - "What's the recommended asset allocation for someone in their 40s?"
-   - "I'm 55 and planning for retirement. How should I split my investments?"
+This will launch the agent and print its address. The agent will be discoverable on the Fetch.ai's Agentverse.
 
-### 🎯 Goal-Oriented Investment Planning
-   - "How should I invest for retirement in my 30s?"
-   - "Where should I keep my emergency fund for best returns?"
-   - "I'm saving for a house down payment in 3 years. Where should I invest?"
+### Testing the Agent
 
-### 📈 Sector-Specific Queries
-   - "What are the top technology stocks to consider?"
-   - "Which healthcare companies are good investments?"
-   - "What financial sector stocks do you recommend?"
+Run the test suite:
 
-### ⚠️ Risk Management & Education
-   - "What are the biggest investment mistakes I should avoid?"
-   - "How do I avoid timing the market?"
-   - "Why is diversification important?"
+```bash
+python test_block_police.py
+```
 
-## Test Agents using Chat with Agent button on Agentverse
+### Example Queries
 
-1. Once the agent is connected via Mailbox, go to `Agent Profile` and click on `Chat with Agent` 
+Using the agent via ASI:One LLM, you can make natural language queries:
 
-2. Interact with your agent through the Agentverse chat interface and try sample queries like:
-   - "I'm a conservative investor, what should I invest in?"
-   - "What returns can I expect from bonds?"
-   - "How should a 30-year-old allocate their portfolio?"
+- "Trace funds stolen from address 0x123... and tell me where they are now"
+- "Analyze holdings for vitalik.eth"
+- "Give me details about transaction 0xabc..."
 
-3. The agent will use MeTTa knowledge graphs to provide structured investment advice based on:
-   - Risk profile analysis
-   - Expected return calculations
-   - Age-appropriate allocation strategies
-   - Goal-oriented planning
+### Project Structure
 
-4. Agent terminal logs will show intent classification and knowledge retrieval from the MeTTa graph
+- `block_police_agent.py`: Main agent file with MCP server implementation
+- `alchemy_tools.py`: Utility functions for interacting with Alchemy API
+- `test_block_police.py`: Test suite for the agent
 
-5. Test the agent with ASI:One platform for natural language investment queries
+## Integration with MeTTa Knowledge Graph
 
-## 📊 Knowledge Graph Structure
+For advanced reasoning about blockchain transactions and patterns, this agent is designed to work with SingularityNET's MeTTa Knowledge Graph, allowing for:
 
-The MeTTa knowledge graph contains financial relationships:
+- Sophisticated pattern recognition across transaction histories
+- Complex reasoning about fund movements and wallet behaviors
+- Context-aware risk assessments
 
-- **Risk Profiles** → Investment Types (conservative → bonds, aggressive → crypto)
-- **Investment Types** → Expected Returns (index_funds → "6-10% annually")
-- **Investment Types** → Risk Levels (cryptocurrency → "very high risk")
-- **Age Groups** → Asset Allocations (30s → "70% stocks, 30% bonds")
-- **Investment Goals** → Strategies (retirement → "diversified index funds")
-- **Market Sectors** → Top Stocks (technology → "Apple, Microsoft, Google")
-- **Common Mistakes** → Warnings (emotional_trading → "avoid panic selling")
+## Development
 
+### Adding New Tools
+
+To add new blockchain investigation tools:
+
+1. Add the method to the `AlchemyTools` class in `alchemy_tools.py`
+2. Expose it via the MCP server by adding a new method to the `AlchemyMCP` class in `block_police_agent.py`
+3. Add appropriate tests in `test_block_police.py`
 
 ## 🔗 Useful Links
 
-- [MeTTa Documentation](https://metta-lang.dev/docs/learn/tutorials/python_use/metta_python_basics.html)
+- [Alchemy API Documentation](https://www.alchemy.com/docs/alchemy-mcp-server)
 - [Fetch.ai uAgents](https://innovationlab.fetch.ai/resources/docs/examples/chat-protocol/asi-compatible-uagents)
 - [Agentverse](https://agentverse.ai/)
 - [ASI:One](https://asi1.ai/)
+- [MeTTa Documentation](https://metta-lang.dev/docs/learn/tutorials/python_use/metta_python_basics.html)
