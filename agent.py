@@ -100,6 +100,23 @@ class AlchemyMCPClient:
         except Exception as e:
             self._ctx.logger.error(f"Error with custom ENS resolution: {e}")
 
+        # Try a direct call to eth_getBalance as a secondary method
+        # Some providers handle ENS resolution internally
+        try:
+            self._ctx.logger.info("Trying direct eth_getBalance to see if the provider handles ENS")
+            result = await self._session.call_tool(
+                "eth_getBalance",
+                {"address": ens_name, "tag": "latest"}
+            )
+
+            if hasattr(result, 'content') and result.content:
+                self._ctx.logger.info(f"Provider can handle ENS directly, using {ens_name} as is")
+                # Since the provider can handle ENS directly, cache the original name
+                self.resolved_ens_cache[ens_name] = ens_name
+                return ens_name
+        except Exception as e:
+            self._ctx.logger.error(f"Direct eth_getBalance with ENS failed: {e}")
+
         # Fall back to Alchemy MCP methods if custom resolution fails
         # Methods to try in order of preference
         methods_to_try = [
@@ -125,21 +142,7 @@ class AlchemyMCPClient:
             except Exception as e:
                 self._ctx.logger.error(f"Error with {method}: {e}")
 
-        # Try a direct call to eth_getBalance as a last resort
-        try:
-            self._ctx.logger.info("Trying direct eth_getBalance to see if the provider handles ENS")
-            result = await self._session.call_tool(
-                "eth_getBalance",
-                {"address": ens_name, "tag": "latest"}
-            )
-
-            if hasattr(result, 'content') and result.content:
-                self._ctx.logger.info(f"Provider can handle ENS directly, using {ens_name} as is")
-                # Since the provider can handle ENS directly, cache the original name
-                self.resolved_ens_cache[ens_name] = ens_name
-                return ens_name
-        except Exception as e:
-            self._ctx.logger.error(f"Direct eth_getBalance failed: {e}")
+        # Skip this step as we already tried direct eth_getBalance above
 
         # If all resolution methods fail, return the original ENS name
         self._ctx.logger.warning(f"Failed to resolve {ens_name}, using as is")
@@ -335,7 +338,7 @@ SESSION_TIMEOUT = 30 * 60
 
 # --- Agent Setup ---
 chat_proto = Protocol(spec=chat_protocol_spec)
-agent = Agent(name="block_police_agent", port=8000, mailbox=True)
+agent = Agent(name="block_police_agent", port=8001, mailbox=True)
 
 def create_text_chat(text: str, end_session: bool = False) -> ChatMessage:
     """Helper to create a chat message with text content"""
@@ -724,7 +727,7 @@ agent.include(chat_proto, publish_manifest=True)
 
 # --- Main Execution Block ---
 if __name__ == "__main__":
-    print(f"Block Police Agent starting on http://localhost:8000")
+    print(f"Block Police Agent starting on http://localhost:8001")
     print(f"Agent address: {agent.address}")
     print("🚨 Ready to investigate blockchain activities!")
 

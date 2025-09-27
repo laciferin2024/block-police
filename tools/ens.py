@@ -9,24 +9,22 @@ from gql.transport.aiohttp import AIOHTTPTransport
 from typing import Dict, Any, Optional, List
 import datetime
 import os
-from dotenv import load_dotenv
 from .registry import register_tool
 
-# Load environment variables
-load_dotenv()
+from config import THEGRAPH_API_KEY
+
 
 # GraphQL client setup
 GRAPH_API_URL = "https://gateway.thegraph.com/api/subgraphs/id/5XqPmWe6gjyrJtFn9cLy237i4cWw2j9HcUJEXsP5qGtH"
-API_KEY = os.getenv("THEGRAPH_API_KEY")
 
 # Check if API key is available
-if not API_KEY:
+if not THEGRAPH_API_KEY:
     print("Warning: THEGRAPH_API_KEY not found in environment variables")
     graphql_client = None
 else:
     transport = AIOHTTPTransport(
         url=GRAPH_API_URL,
-        headers={"Authorization": f"Bearer {API_KEY}"}
+        headers={"Authorization": f"Bearer {THEGRAPH_API_KEY}"}
     )
     graphql_client = Client(transport=transport, fetch_schema_from_transport=False)
 
