@@ -12,6 +12,7 @@ import mcp
 from dotenv import load_dotenv
 from tools import get_registered_tools
 from tools.ens import resolve_ens_name, get_domain_details, get_domain_events
+from tools.token import get_token_metadata, get_token_holders, get_token_transfers, get_holder_tokens, search_tokens
 
 # Load environment variables
 load_dotenv()
@@ -403,7 +404,12 @@ I can help you investigate blockchain transactions, trace funds, and analyze wal
 - Get holdings for an address or ENS name
 - Get transaction details
 - Get ENS domain details
+- Get ENS domain details
 - Get ENS domain events history
+- Get token metadata
+- Get token holders
+- Get token transfers
+- Search for tokens
 - Monitor suspicious activities
 
 How can I assist with your blockchain investigation today?"""
@@ -547,8 +553,279 @@ Please provide a query with a valid ENS name (name.eth).
 Example: "Get ENS events for vitalik.eth\""""
 
 
+    # Check for token metadata queries
+    if any(phrase in query_lower for phrase in ['token info', 'token metadata', 'token details']):
+        import re
+        address_match = re.search(r'0x[a-fA-F0-9]{40}', query)
+
+        if address_match:
+            address = address_match.group(0)
+            ctx.logger.info(f"Detected token metadata request for: {address}")
+
+            # Extract chain if specified
+            chain = "ethereum"
+            if "polygon" in query_lower or "matic" in query_lower:
+                chain = "polygon"
+            elif "arbitrum" in query_lower:
+                chain = "arbitrum"
+
+            try:
+                metadata = await get_token_metadata(address, chain)
+
+                if isinstance(metadata, dict) and "error" in metadata:
+                    return f"""❌ **Token Metadata Failed**
+
+Unable to get metadata for {address}:
+{metadata.get('error', 'Unknown error')}
+
+Please verify the token address is correct and try again."""
+
+                return f"""📊 **Token Metadata**
+
+**Name:** {metadata.get('name', 'Unknown')}
+**Symbol:** {metadata.get('symbol', 'Unknown')}
+**Decimals:** {metadata.get('decimals', 'Unknown')}
+**Total Supply:** {metadata.get('totalSupply', 'Unknown')}
+**Chain:** {chain}
+**Contract:** {address}
+
+*This data is provided by TheGraph Token API.*"""
+
+            except Exception as e:
+                ctx.logger.error(f"Error getting token metadata: {e}")
+                return f"""❌ **Token Metadata Failed**
+
+Encountered an error while fetching metadata for {address}:
+{str(e)}
+
+Please try again later."""
+
+        else:
+            return """⚠️ **Token Address Not Detected**
+
+I need a valid token contract address to check token details.
+Please provide a query with a valid token address (0x...).
+
+Example: "Get token details for 0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984\""""
+
+    # Check for token holders queries
+    elif any(phrase in query_lower for phrase in ['token holders', 'who owns', 'token owners', 'holder list']):
+        import re
+        address_match = re.search(r'0x[a-fA-F0-9]{40}', query)
+
+        if address_match:
+            address = address_match.group(0)
+            ctx.logger.info(f"Detected token holders request for: {address}")
+
+            # Extract chain if specified
+            chain = "ethereum"
+            if "polygon" in query_lower or "matic" in query_lower:
+                chain = "polygon"
+            elif "arbitrum" in query_lower:
+                chain = "arbitrum"
+
+            # Extract limit if specified
+            limit = 10
+            limit_match = re.search(r'top\s+(\d+)', query_lower)
+            if limit_match:
+                try:
+                    limit = int(limit_match.group(1))
+                    limit = min(100, max(1, limit))  # Ensure limit is between 1 and 100
+                except:
+                    pass
+
+            try:
+                holders = await get_token_holders(address, limit, chain)
+
+                if isinstance(holders, dict) and "error" in holders:
+                    return f"""❌ **Token Holders Query Failed**
+
+Unable to get holders for {address}:
+{holders.get('error', 'Unknown error')}
+
+Please verify the token address is correct and try again."""
+
+                holder_list = holders.get('holders', [])
+                holder_count = len(holder_list)
+
+                # Format the holder list
+                formatted_holders = "\n".join([f"**{i+1}.** {h['address']} - {h['balance']}" for i, h in enumerate(holder_list[:limit])])
+
+                return f"""👥 **Token Holders**
+
+**Token Address:** {address}
+**Chain:** {chain}
+**Total Holders Found:** {holder_count}
+
+**Top {limit} Holders:**
+{formatted_holders}
+
+*This data is provided by TheGraph Token API.*"""
+
+            except Exception as e:
+                ctx.logger.error(f"Error getting token holders: {e}")
+                return f"""❌ **Token Holders Query Failed**
+
+Encountered an error while fetching holders for {address}:
+{str(e)}
+
+Please try again later."""
+
+        else:
+            return """⚠️ **Token Address Not Detected**
+
+I need a valid token contract address to check token holders.
+Please provide a query with a valid token address (0x...).
+
+Example: "Get top holders for 0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984\""""
+
+    # Check for token transfers queries
+    elif any(phrase in query_lower for phrase in ['token transfers', 'token transactions', 'token movements']):
+        import re
+        address_match = re.search(r'0x[a-fA-F0-9]{40}', query)
+
+        if address_match:
+            address = address_match.group(0)
+            ctx.logger.info(f"Detected token transfers request for: {address}")
+
+            # Extract chain if specified
+            chain = "ethereum"
+            if "polygon" in query_lower or "matic" in query_lower:
+                chain = "polygon"
+            elif "arbitrum" in query_lower:
+                chain = "arbitrum"
+
+            # Extract limit if specified
+            limit = 10
+            limit_match = re.search(r'(\d+)\s+transfers', query_lower)
+            if limit_match:
+                try:
+                    limit = int(limit_match.group(1))
+                    limit = min(100, max(1, limit))  # Ensure limit is between 1 and 100
+                except:
+                    pass
+
+            try:
+                transfers = await get_token_transfers(address, limit, chain)
+
+                if isinstance(transfers, dict) and "error" in transfers:
+                    return f"""❌ **Token Transfers Query Failed**
+
+Unable to get transfers for {address}:
+{transfers.get('error', 'Unknown error')}
+
+Please verify the token address is correct and try again."""
+
+                transfer_list = transfers.get('transfers', [])
+                transfer_count = len(transfer_list)
+
+                # Format the transfer list
+                formatted_transfers = "\n".join([f"**{i+1}.** From {t['from'][:10]}...{t['from'][-6:]} to {t['to'][:10]}...{t['to'][-6:]} - {t['value']}" for i, t in enumerate(transfer_list[:limit])])
+
+                return f"""📦 **Token Transfers**
+
+**Token Address:** {address}
+**Chain:** {chain}
+**Total Transfers Found:** {transfer_count}
+
+**Recent Transfers:**
+{formatted_transfers}
+
+*This data is provided by TheGraph Token API.*"""
+
+            except Exception as e:
+                ctx.logger.error(f"Error getting token transfers: {e}")
+                return f"""❌ **Token Transfers Query Failed**
+
+Encountered an error while fetching transfers for {address}:
+{str(e)}
+
+Please try again later."""
+
+        else:
+            return """⚠️ **Token Address Not Detected**
+
+I need a valid token contract address to check token transfers.
+Please provide a query with a valid token address (0x...).
+
+Example: "Get token transfers for 0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984\""""
+
+    # Check for token search queries
+    elif any(phrase in query_lower for phrase in ['search token', 'find token', 'lookup token']):
+        # Extract search query
+        import re
+        search_match = re.search(r'token[s]?\s+(?:for|with|named|called)\s+["]?([\w\s]+)["]?', query_lower)
+
+        if not search_match:
+            search_match = re.search(r'(?:search|find|lookup)\s+["]?([\w\s]+)["]?\s+token', query_lower)
+
+        if search_match:
+            search_term = search_match.group(1).strip()
+            ctx.logger.info(f"Detected token search request for: {search_term}")
+
+            # Extract chain if specified
+            chain = "ethereum"
+            if "polygon" in query_lower or "matic" in query_lower:
+                chain = "polygon"
+            elif "arbitrum" in query_lower:
+                chain = "arbitrum"
+
+            try:
+                results = await search_tokens(search_term, 10, chain)
+
+                if isinstance(results, dict) and "error" in results:
+                    return f"""❌ **Token Search Failed**
+
+Unable to search for '{search_term}':
+{results.get('error', 'Unknown error')}
+
+Please try a different search term."""
+
+                tokens = results.get('tokens', [])
+                token_count = len(tokens)
+
+                if token_count == 0:
+                    return f"""🔍 **Token Search Results**
+
+**Search Term:** {search_term}
+**Chain:** {chain}
+**Results:** No tokens found matching your search.
+
+Try a different search term or check the spelling."""
+
+                # Format the token list
+                formatted_tokens = "\n".join([f"**{i+1}.** {t['name']} ({t['symbol']}) - {t['address']}" for i, t in enumerate(tokens[:10])])
+
+                return f"""🔍 **Token Search Results**
+
+**Search Term:** {search_term}
+**Chain:** {chain}
+**Total Results:** {token_count}
+
+**Matching Tokens:**
+{formatted_tokens}
+
+*This data is provided by TheGraph Token API.*"""
+
+            except Exception as e:
+                ctx.logger.error(f"Error searching tokens: {e}")
+                return f"""❌ **Token Search Failed**
+
+Encountered an error while searching for '{search_term}':
+{str(e)}
+
+Please try again later."""
+
+        else:
+            return """⚠️ **Search Term Not Detected**
+
+I need a search term to find tokens.
+Please provide a query with a clear search term.
+
+Example: "Search for tokens named Uniswap" or "Find tokens with DAI\""""
+
     # Check for trace/tracking queries
-    if any(word in query_lower for word in ['trace', 'track', 'follow', 'stolen', 'theft']):
+    elif any(word in query_lower for word in ['trace', 'track', 'follow', 'stolen', 'theft']):
         # Extract addresses using a simple regex pattern
         import re
         address_match = re.search(r'0x[a-fA-F0-9]{40}', query)
@@ -711,6 +988,18 @@ I can help you investigate blockchain activities. Try one of these queries:
 
 5️⃣ **ENS Domain Events**
    Example: "Get ENS events for vitalik.eth"
+
+6️⃣ **Token Metadata**
+   Example: "Get token info for 0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984"
+
+7️⃣ **Token Holders**
+   Example: "Get top holders for 0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984"
+
+8️⃣ **Token Transfers**
+   Example: "Get token transfers for 0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984"
+
+9️⃣ **Search Tokens**
+   Example: "Search for tokens named Uniswap"
 
 Just provide the appropriate address, ENS name, or transaction hash with your query."""
 
