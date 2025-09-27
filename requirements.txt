@@ -3,3 +3,5 @@ uagents-core>=0.3.9
 mcp
 python-dotenv
 httpx
+gql
+aiohttp

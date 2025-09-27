@@ -10,6 +10,8 @@ from mcp.client.stdio import stdio_client
 from contextlib import AsyncExitStack
 import mcp
 from dotenv import load_dotenv
+from tools import get_registered_tools
+from tools.ens import resolve_ens_name, get_domain_details, get_domain_events
 
 # Load environment variables
 load_dotenv()
@@ -33,6 +35,7 @@ class AlchemyMCPClient:
         self._session = None
         self._exit_stack = AsyncExitStack()
         self.tools = []  # Will be populated after connection
+        self.resolved_ens_cache = {}  # Cache for ENS resolution
 
     async def connect(self):
         """Connect to Alchemy MCP server via local npx execution"""
@@ -68,6 +71,80 @@ class AlchemyMCPClient:
             self._ctx.logger.error(f"Failed to connect to Alchemy MCP server: {e}")
             raise
 
+    async def resolve_ens_to_address(self, ens_name: str) -> str:
+        """
+        Resolve ENS name to address using multiple methods
+        Returns the original name if resolution fails
+        """
+        # Check cache first
+        if ens_name in self.resolved_ens_cache:
+            return self.resolved_ens_cache[ens_name]
+
+        # Only try to resolve .eth names
+        if not ens_name.endswith(".eth"):
+            return ens_name
+
+        self._ctx.logger.info(f"Resolving ENS name: {ens_name}")
+
+        # First try our custom ENS resolution tool
+        try:
+            self._ctx.logger.info(f"Using custom ENS resolution tool")
+            address = await resolve_ens_name(ens_name)
+
+            # Check if we got a valid address or error message
+            if address and not address.startswith("Error:") and not address.startswith("No data"):
+                self._ctx.logger.info(f"Successfully resolved {ens_name} to {address} using custom tool")
+                # Cache the result
+                self.resolved_ens_cache[ens_name] = address
+                return address
+        except Exception as e:
+            self._ctx.logger.error(f"Error with custom ENS resolution: {e}")
+
+        # Fall back to Alchemy MCP methods if custom resolution fails
+        # Methods to try in order of preference
+        methods_to_try = [
+            {"method": "ens_getAddress", "params": {"name": ens_name}},
+            {"method": "eth_resolveENS", "params": {"ensName": ens_name}},
+            {"method": "alchemy_resolveENS", "params": {"ens": ens_name}}
+        ]
+
+        for method_info in methods_to_try:
+            method = method_info["method"]
+            params = method_info["params"]
+
+            try:
+                self._ctx.logger.info(f"Trying ENS resolution method: {method}")
+                result = await self._session.call_tool(method, params)
+
+                if hasattr(result, 'content') and result.content:
+                    address = result.content
+                    self._ctx.logger.info(f"Successfully resolved {ens_name} to {address} using {method}")
+                    # Cache the result
+                    self.resolved_ens_cache[ens_name] = address
+                    return address
+            except Exception as e:
+                self._ctx.logger.error(f"Error with {method}: {e}")
+
+        # Try a direct call to eth_getBalance as a last resort
+        try:
+            self._ctx.logger.info("Trying direct eth_getBalance to see if the provider handles ENS")
+            result = await self._session.call_tool(
+                "eth_getBalance",
+                {"address": ens_name, "tag": "latest"}
+            )
+
+            if hasattr(result, 'content') and result.content:
+                self._ctx.logger.info(f"Provider can handle ENS directly, using {ens_name} as is")
+                # Since the provider can handle ENS directly, cache the original name
+                self.resolved_ens_cache[ens_name] = ens_name
+                return ens_name
+        except Exception as e:
+            self._ctx.logger.error(f"Direct eth_getBalance failed: {e}")
+
+        # If all resolution methods fail, return the original ENS name
+        self._ctx.logger.warning(f"Failed to resolve {ens_name}, using as is")
+        return ens_name
+
     async def trace_evm_funds(self, start_address: str, hop_limit: int = 100) -> Dict[str, Any]:
         """
         Traces the path of funds across EVM transactions, hop by hop.
@@ -75,6 +152,9 @@ class AlchemyMCPClient:
         """
         try:
             self._ctx.logger.info(f"Tracing funds from address: {start_address}")
+
+            # Resolve ENS if needed
+            address = await self.resolve_ens_to_address(start_address)
 
             # Check which tools are available for tracing
             trace_tools = [tool for tool in self.tools if 'trace' in tool.name.lower()]
@@ -85,7 +165,7 @@ class AlchemyMCPClient:
                 result = await self._session.call_tool(
                     "alchemy_getAssetTransfers",
                     {
-                        "fromAddress": start_address,
+                        "fromAddress": address,
                         "category": ["external", "internal", "erc20", "erc721", "erc1155"],
                         "maxCount": "0x" + format(hop_limit, 'x')
                     }
@@ -113,7 +193,7 @@ class AlchemyMCPClient:
 
                 result = await self._session.call_tool(
                     trace_tool.name,
-                    {"address": start_address, "limit": hop_limit}
+                    {"address": address, "limit": hop_limit}
                 )
 
                 if hasattr(result, 'content'):
@@ -133,16 +213,19 @@ class AlchemyMCPClient:
         try:
             self._ctx.logger.info(f"Getting holdings for: {address_or_ens}")
 
-            # Get ETH balance
+            # Resolve ENS to address if needed
+            address = await self.resolve_ens_to_address(address_or_ens)
+
+            # Get ETH balance - Using params object instead of array
             balance_result = await self._session.call_tool(
                 "eth_getBalance",
-                [address_or_ens, "latest"]
+                {"address": address, "tag": "latest"}
             )
 
             # Get token balances
             token_balances_result = await self._session.call_tool(
                 "alchemy_getTokenBalances",
-                {"address": address_or_ens}
+                {"address": address}
             )
 
             # Get NFTs if the tool is available
@@ -155,7 +238,7 @@ class AlchemyMCPClient:
 
                 nft_result = await self._session.call_tool(
                     nft_tool.name,
-                    {"owner": address_or_ens}
+                    {"owner": address}
                 )
 
                 if hasattr(nft_result, 'content'):
@@ -205,9 +288,15 @@ class AlchemyMCPClient:
         try:
             self._ctx.logger.info(f"Getting transaction details for: {tx_hash}")
 
+            # Note: tx_hash is already a transaction hash, not an ENS name
+            # but we include this check for consistency in case the method
+            # is called with an address parameter that could be ENS
+            if tx_hash.endswith('.eth'):
+                tx_hash = await self.resolve_ens_to_address(tx_hash)
+
             result = await self._session.call_tool(
                 "eth_getTransactionByHash",
-                [tx_hash]
+                {"txHash": tx_hash}
             )
 
             if hasattr(result, 'content') and result.content:
@@ -310,6 +399,8 @@ I can help you investigate blockchain transactions, trace funds, and analyze wal
 - Trace funds from an address
 - Get holdings for an address or ENS name
 - Get transaction details
+- Get ENS domain details
+- Get ENS domain events history
 - Monitor suspicious activities
 
 How can I assist with your blockchain investigation today?"""
@@ -355,6 +446,103 @@ async def handle_chat_ack(ctx: Context, sender: str, msg: ChatAcknowledgement):
 async def process_blockchain_query(ctx: Context, client: AlchemyMCPClient, query: str) -> str:
     """Process blockchain investigation query"""
     query_lower = query.lower()
+
+    # Check for ENS domain details request
+    if any(phrase in query_lower for phrase in ['ens details', 'domain details', 'ens info', 'domain info']):
+        import re
+        ens_match = re.search(r'[a-zA-Z0-9_-]+\.eth', query)
+
+        if ens_match:
+            ens_name = ens_match.group(0)
+            ctx.logger.info(f"Detected ENS details request for: {ens_name}")
+
+            try:
+                domain_details = await get_domain_details(ens_name)
+
+                if isinstance(domain_details, dict) and "error" in domain_details:
+                    return f"""❌ **ENS Domain Analysis Failed**
+
+Unable to get details for {ens_name}:
+{domain_details.get('error', 'Unknown error')}
+
+Please verify the ENS name is correct and try again."""
+
+                return f"""📋 **ENS Domain Details**
+
+**Name:** {ens_name}
+**Address:** {domain_details.get('address', 'None')}
+**Owner:** {domain_details.get('owner', 'None')}
+**Created:** {domain_details.get('created', 'Unknown')}
+**Expiry:** {domain_details.get('expiry', 'Unknown')}
+**Subdomain Count:** {domain_details.get('subdomainCount', '0')}
+
+*For more detailed information, please use a specialized ENS lookup service.*"""
+
+            except Exception as e:
+                ctx.logger.error(f"Error getting ENS details: {e}")
+                return f"""❌ **ENS Domain Analysis Failed**
+
+Encountered an error while fetching details for {ens_name}:
+{str(e)}
+
+Please try again later."""
+
+        else:
+            return """⚠️ **ENS Name Not Detected**
+
+I need a valid ENS name to check domain details.
+Please provide a query with a valid ENS name (name.eth).
+
+Example: "Get ENS details for vitalik.eth\""""
+
+    # Check for ENS domain events request
+    elif any(phrase in query_lower for phrase in ['ens events', 'domain events', 'ens history', 'domain history']):
+        import re
+        ens_match = re.search(r'[a-zA-Z0-9_-]+\.eth', query)
+
+        if ens_match:
+            ens_name = ens_match.group(0)
+            ctx.logger.info(f"Detected ENS events request for: {ens_name}")
+
+            try:
+                events = await get_domain_events(ens_name)
+
+                if isinstance(events, list) and len(events) > 0 and "error" in events[0]:
+                    return f"""❌ **ENS Domain Events Failed**
+
+Unable to get events for {ens_name}:
+{events[0].get('error', 'Unknown error')}
+
+Please verify the ENS name is correct and try again."""
+
+                event_count = len(events)
+                return f"""📜 **ENS Domain Events**
+
+**Name:** {ens_name}
+**Total Events:** {event_count}
+
+**Recent Events:**
+{', '.join([event.get('type', 'Unknown') for event in events[:5]])}...
+
+*For a complete event history, please use a specialized ENS lookup service.*"""
+
+            except Exception as e:
+                ctx.logger.error(f"Error getting ENS events: {e}")
+                return f"""❌ **ENS Domain Events Failed**
+
+Encountered an error while fetching events for {ens_name}:
+{str(e)}
+
+Please try again later."""
+
+        else:
+            return """⚠️ **ENS Name Not Detected**
+
+I need a valid ENS name to check domain events.
+Please provide a query with a valid ENS name (name.eth).
+
+Example: "Get ENS events for vitalik.eth\""""
+
 
     # Check for trace/tracking queries
     if any(word in query_lower for word in ['trace', 'track', 'follow', 'stolen', 'theft']):
@@ -514,6 +702,12 @@ I can help you investigate blockchain activities. Try one of these queries:
 
 3️⃣ **Examine transactions**
    Example: "Analyze transaction 0x456def..."
+
+4️⃣ **ENS Domain Details**
+   Example: "Get ENS details for vitalik.eth"
+
+5️⃣ **ENS Domain Events**
+   Example: "Get ENS events for vitalik.eth"
 
 Just provide the appropriate address, ENS name, or transaction hash with your query."""
 

@@ -10,4 +10,6 @@ dependencies = [
     "uagents-core>=0.3.9",
     "mcp",
     "httpx",
+    "gql[all]>=3.5.3",
+    "mcp[cli]>=1.9.4"
 ]
