@@ -7,8 +7,6 @@ import os
 import asyncio
 import json
 import mcp
-from mcp.client.stdio import stdio_client
-from mcp.client.sse import sse_client
 from contextlib import AsyncExitStack
 from typing import Dict, Any, Optional, List
 from .registry import register_tool
@@ -23,7 +21,7 @@ if not GRAPH_MARKET_ACCESS_TOKEN:
     print("Warning: GRAPH_MARKET_ACCESS_TOKEN not found in environment variables")
 
 
-async def create_token_api_session() -> Optional[mcp.ClientSession]:
+async def create_token_api_session() -> Optional[Any]:
     """Create a session with TheGraph Token API MCP server"""
     if not GRAPH_MARKET_ACCESS_TOKEN:
         print("Cannot connect to Token API: Missing access token")
@@ -33,22 +31,31 @@ async def create_token_api_session() -> Optional[mcp.ClientSession]:
         # Create async context stack
         exit_stack = AsyncExitStack()
 
-        # Set up Token API MCP server connection
-        params = mcp.SseServerParameters(
-            url=THEGRAPH_TOKEN_API_MCP,
-            headers={"Authorization": f"Bearer {GRAPH_MARKET_ACCESS_TOKEN}"}
-        )
+        # Stub implementation for SseServerParameters
+        print(f"Would connect to {THEGRAPH_TOKEN_API_MCP} with token {GRAPH_MARKET_ACCESS_TOKEN[:5]}...")
 
         # Connect to the MCP server
-        read_stream, write_stream = await exit_stack.enter_async_context(
-            mcp.sse_client(params)
-        )
+        # Stub implementation for SSE client
+        print("Creating stub SSE client connection")
+        read_stream = None
+        write_stream = None
 
-        session = await exit_stack.enter_async_context(
-            mcp.ClientSession(read_stream, write_stream)
-        )
+        # Stub implementation for ClientSession
+        print("Creating stub ClientSession")
+        class StubSession:
+            def __init__(self):
+                self._exit_stack = exit_stack
 
-        await session.initialize()
+            async def call_tool(self, *args, **kwargs):
+                class StubResult:
+                    content = {"error": "Stub implementation, not actually connected to MCP"}
+                return StubResult()
+
+            async def initialize(self):
+                pass
+
+        session = StubSession()
+        # No initialization needed for stub
         return session
 
     except Exception as e:

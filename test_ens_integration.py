@@ -8,7 +8,7 @@ Includes tests for both custom ENS tools and Alchemy MCP integration.
 import asyncio
 import json
 import mcp
-from mcp.client.stdio import stdio_client
+from mcp.clients.stdio import stdio_client
 from contextlib import AsyncExitStack
 import os
 from dotenv import load_dotenv
