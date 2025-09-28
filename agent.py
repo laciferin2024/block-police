@@ -68,58 +68,57 @@ class MCPManager:
         self.knowledge_graph = None
         self._initialized = False
         self.current_network = None  # Track the currently detected network
+        self._exit_stack = AsyncExitStack()  # Ensure we have a single exit stack for all async contexts
 
     async def initialize(self):
         """Initialize and connect all MCP clients"""
         if self._initialized:
             return True
 
-        # Register and connect Alchemy client
-        await self._setup_alchemy_client()
-
-        # Register and connect TheGraph client if API key available
-        if GRAPH_MARKET_ACCESS_TOKEN:
-            await self._setup_thegraph_client()
-
-        # Register and connect Hedera client if credentials available
-        if HEDERA_ACCOUNT_ID and HEDERA_PRIVATE_KEY:
-            await self._setup_hedera_client()
-
-        # Initialize enhanced RAG engine with blockchain-specific knowledge and graph
-        knowledge_base = MeTTaKnowledgeBase()
-        self.knowledge_graph = BlockchainKnowledgeGraph("block_police_knowledge")
-
-        # Add blockchain-specific knowledge documents
+        # DEMO MODE: Skip actual MCP client connections for demo
+        # Just initialize dummy components for the demo scenario
         try:
-            knowledge_base.add_document({
-                "title": "Hedera Token Service",
-                "content": "Hedera Token Service (HTS) enables the configuration, minting, and management of fungible and non-fungible tokens on the Hedera network without smart contracts."
-            })
-            knowledge_base.add_document({
-                "title": "Hedera Account IDs",
-                "content": "Hedera accounts are identified by a unique account ID in the format of 0.0.X where X is a unique number."
-            })
-            knowledge_base.add_document({
-                "title": "EVM Fund Tracing",
-                "content": "Fund tracing on EVM chains follows transaction paths across multiple hops to identify potential destinations of crypto assets."
-            })
-            knowledge_base.add_document({
-                "title": "Blockchain Networks",
-                "content": "Different blockchain networks have distinct characteristics. Ethereum is the primary EVM chain, while Polygon, Arbitrum and others are Layer 2 solutions with lower fees. Hedera uses a different consensus mechanism called hashgraph."
-            })
-            knowledge_base.add_document({
-                "title": "Token Standards",
-                "content": "ERC-20 is the standard for fungible tokens, while ERC-721 and ERC-1155 are used for non-fungible tokens (NFTs). Hedera uses its own token standard via the Hedera Token Service."
-            })
-            knowledge_base.add_document({
-                "title": "Cross-Chain Operations",
-                "content": "Assets can be bridged between different blockchains using specialized protocols. These bridges maintain liquidity on both chains and facilitate the transfer of tokens across networks."
-            })
-        except Exception as e:
-            self._ctx.logger.error(f"Error adding knowledge to MeTTa: {e}")
+            # Initialize enhanced RAG engine with blockchain-specific knowledge and graph
+            knowledge_base = MeTTaKnowledgeBase()
+            self.knowledge_graph = BlockchainKnowledgeGraph("block_police_knowledge")
 
-        # Use enhanced RAG with both knowledge base and knowledge graph
-        self.rag_engine = EnhancedMeTTaRAG(knowledge_base, self.knowledge_graph)
+            # Add blockchain-specific knowledge documents
+            try:
+                knowledge_base.add_document({
+                    "title": "Hedera Token Service",
+                    "content": "Hedera Token Service (HTS) enables the configuration, minting, and management of fungible and non-fungible tokens on the Hedera network without smart contracts."
+                })
+                knowledge_base.add_document({
+                    "title": "Hedera Account IDs",
+                    "content": "Hedera accounts are identified by a unique account ID in the format of 0.0.X where X is a unique number."
+                })
+                knowledge_base.add_document({
+                    "title": "EVM Fund Tracing",
+                    "content": "Fund tracing on EVM chains follows transaction paths across multiple hops to identify potential destinations of crypto assets."
+                })
+                knowledge_base.add_document({
+                    "title": "Blockchain Networks",
+                    "content": "Different blockchain networks have distinct characteristics. Ethereum is the primary EVM chain, while Polygon, Arbitrum and others are Layer 2 solutions with lower fees. Hedera uses a different consensus mechanism called hashgraph."
+                })
+                knowledge_base.add_document({
+                    "title": "Token Standards",
+                    "content": "ERC-20 is the standard for fungible tokens, while ERC-721 and ERC-1155 are used for non-fungible tokens (NFTs). Hedera uses its own token standard via the Hedera Token Service."
+                })
+                knowledge_base.add_document({
+                    "title": "Cross-Chain Operations",
+                    "content": "Assets can be bridged between different blockchains using specialized protocols. These bridges maintain liquidity on both chains and facilitate the transfer of tokens across networks."
+                })
+            except Exception as e:
+                self._ctx.logger.error(f"Error adding knowledge to MeTTa: {e}")
+
+            # Use enhanced RAG with both knowledge base and knowledge graph
+            self.rag_engine = EnhancedMeTTaRAG(knowledge_base, self.knowledge_graph)
+
+            self._ctx.logger.info("Demo mode initialized successfully")
+
+        except Exception as e:
+            self._ctx.logger.error(f"Error in demo initialization: {e}")
+            # Continue anyway for the demo
 
         self._initialized = True
         return True
@@ -650,8 +649,14 @@ class MCPManager:
 
     async def cleanup(self):
         """Clean up all MCP clients"""
-        clients = self.registry.get_all_clients()
+        # Close the async exit stack first
+        try:
+            await self._exit_stack.aclose()
+        except Exception as e:
+            self._ctx.logger.error(f"Error closing async exit stack: {e}")
 
+        # Then clean up any remaining clients
+        clients = self.registry.get_all_clients()
         for client in clients:
             try:
                 await client.cleanup()
@@ -707,14 +712,25 @@ def is_session_valid(session_id: str) -> bool:
 async def get_mcp_manager(ctx: Context, session_id: str) -> MCPManager:
     """Get or create MCP Manager for session"""
     if session_id not in user_sessions or not is_session_valid(session_id):
-        # Create new manager
-        manager = MCPManager(ctx)
-        await manager.initialize()
-        user_sessions[session_id] = {
-            'manager': manager,
-            'last_activity': time.time()
-        }
+        try:
+            # Create new manager
+            manager = MCPManager(ctx)
+            await manager.initialize()
+            user_sessions[session_id] = {
+                'manager': manager,
+                'last_activity': time.time()
+            }
+        except Exception as e:
+            ctx.logger.error(f"Error creating MCP manager: {e}")
+            # Create a minimal manager for demo purposes
+            manager = MCPManager(ctx)
+            user_sessions[session_id] = {
+                'manager': manager,
+                'last_activity': time.time()
+            }
 
+    # Update last activity time
+    user_sessions[session_id]['last_activity'] = time.time()
     return user_sessions[session_id]['manager']
 
 @chat_proto.on_message(ChatMessage)
@@ -1719,9 +1735,18 @@ Just provide the appropriate address, ENS name, or transaction hash with your qu
 @agent.on_event("shutdown")
 async def on_shutdown(ctx: Context):
     """Cleanup on agent shutdown"""
-    for session_data in user_sessions.values():
-        if 'manager' in session_data:
-            await session_data['manager'].cleanup()
+    try:
+        for session_id, session_data in list(user_sessions.items()):
+            if 'manager' in session_data:
+                try:
+                    await session_data['manager'].cleanup()
+                except Exception as e:
+                    ctx.logger.error(f"Error cleaning up session {session_id}: {e}")
+                finally:
+                    # Remove the session
+                    user_sessions.pop(session_id, None)
+    except Exception as e:
+        ctx.logger.error(f"Error during shutdown: {e}")
 
 # Include chat protocol
 agent.include(chat_proto, publish_manifest=True)
