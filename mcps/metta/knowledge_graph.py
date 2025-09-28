@@ -11,7 +11,7 @@ import time
 from datetime import datetime
 
 try:
-    import metta_python as metta
+    from hyperon import MeTTa as metta, E, S, ValueAtom
 except ImportError:
     logging.warning("metta_python not found; using mock implementation")
     # Mock implementation for when metta_python is not available
