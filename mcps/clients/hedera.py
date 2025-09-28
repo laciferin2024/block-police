@@ -53,7 +53,7 @@ class HederaMCPClient(MCPClient):
             logging.info(f"Connecting to Hedera MCP server with account: {self.account_id}")
 
             # Use npx to run Hedera MCP server locally
-            params = StdioServerParameters(
+            params = mcp.StdioServerParameters(
                 command="npx",
                 args=[
                     "-y",
@@ -65,7 +65,7 @@ class HederaMCPClient(MCPClient):
             )
 
             read_stream, write_stream = await self._exit_stack.enter_async_context(
-                stdio_client(params)
+                mcp.client.stdio.stdio_client(params)
             )
 
             self._session = await self._exit_stack.enter_async_context(

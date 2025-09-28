@@ -47,14 +47,14 @@ class AlchemyMCPClient(MCPClient):
             logging.info(f"Connecting to Alchemy MCP server with API key: {self.config.api_key}")
 
             # Use npx to run Alchemy MCP server locally
-            params = StdioServerParameters(
+            params = mcp.StdioServerParameters(
                 command="npx",
                 args=["-y", "@alchemy/mcp-server"],
                 env={"ALCHEMY_API_KEY": self.config.api_key or ALCHEMY_API_KEY}
             )
 
             read_stream, write_stream = await self._exit_stack.enter_async_context(
-                stdio_client(params)
+                mcp.client.stdio.stdio_client(params)
             )
 
             self._session = await self._exit_stack.enter_async_context(

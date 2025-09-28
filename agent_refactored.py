@@ -677,7 +677,7 @@ SESSION_TIMEOUT = 30 * 60
 
 # --- Agent Setup ---
 chat_proto = Protocol(spec=chat_protocol_spec)
-agent = Agent(name="block_police_agent", port=8002, mailbox=True)
+agent = Agent(name="Block Police", port=8002, mailbox=True)
 
 def create_text_chat(text: str, end_session: bool = False) -> ChatMessage:
     """Helper to create a chat message with text content"""

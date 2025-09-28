@@ -55,7 +55,7 @@ class TheGraphMCPClient(MCPClient):
 
             # Connect to the MCP server
             read_stream, write_stream = await self._exit_stack.enter_async_context(
-                sse_client(params)
+                mcp.client.sse.sse_client(params)
             )
 
             self._session = await self._exit_stack.enter_async_context(
