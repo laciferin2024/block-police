@@ -6,7 +6,7 @@ Integration with TheGraph MCP server for blockchain data access.
 import asyncio
 import mcps
 import mcp
-from mcp.client.sse import sse_client, SseServerParameters
+from mcp.client.sse import sse_client
 from contextlib import AsyncExitStack
 from typing import Dict, Any, List, Optional, Set
 import logging
@@ -48,10 +48,10 @@ class TheGraphMCPClient(MCPClient):
                 return False
 
             # Set up TheGraph Token API MCP server connection
-            params = SseServerParameters(
-                url=self.config.endpoint or THEGRAPH_TOKEN_API_MCP,
-                headers={"Authorization": f"Bearer {api_key}"}
-            )
+            params = {
+                "url": self.config.endpoint or THEGRAPH_TOKEN_API_MCP,
+                "headers": {"Authorization": f"Bearer {api_key}"}
+            }
 
             # Connect to the MCP server
             read_stream, write_stream = await self._exit_stack.enter_async_context(
