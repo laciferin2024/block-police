@@ -1,325 +1,663 @@
-import os
+"""
+Block Police Agent
+
+Blockchain investigator agent that can trace EVM transactions,
+analyze wallets, and provide insights using MCP servers.
+"""
 import asyncio
 import json
 import time
+import logging
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 from uuid import uuid4
 from uagents import Agent, Context, Protocol
 from contextlib import AsyncExitStack
-import mcp
-from mcp.client.stdio import stdio_client, StdioServerParameters
-from dotenv import load_dotenv
+import mcps
 from tools import get_registered_tools
-from tools.ens import resolve_ens_name, get_domain_details, get_domain_events
-from tools.token import get_token_metadata, get_token_holders, get_token_transfers, get_holder_tokens, search_tokens
 
-# Load environment variables
-load_dotenv()
+# Import centralized configuration
+from config import (
+    ALCHEMY_API_KEY,
+    GRAPH_MARKET_ACCESS_TOKEN,
+    THEGRAPH_API_KEY,
+    ASI_ONE_API_KEY,
+    HEDERA_ACCOUNT_ID,
+    HEDERA_PRIVATE_KEY,
+    HEDERA_NETWORK,
+    THEGRAPH_TOKEN_API_MCP,
+)
+
+# Import MCP client registry and capabilities
+from mcps import MCPRegistry, MCPCapability, MCPClientConfig
+from mcps.clients.alchemy import AlchemyMCPClient
+from mcps.clients.thegraph import TheGraphMCPClient
+from mcps.clients.hedera import HederaMCPClient
+from mcps.metta.knowledge_base import MeTTaKnowledgeBase
+from mcps.metta.knowledge_graph import BlockchainKnowledgeGraph
+from mcps.metta.enhanced_rag import EnhancedMeTTaRAG
+from mcps.network import network_manager, NetworkType, EVMNetwork, HederaNetwork
+
+# Import additional modules for enhanced processing
+import json
+from datetime import timedelta
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger("block_police")
 
 # Check for required API keys
-ALCHEMY_API_KEY = os.getenv("ALCHEMY_API_KEY")
-ASI_ONE_API_KEY = os.getenv("ASI_ONE_API_KEY")
-
 if not ALCHEMY_API_KEY:
     raise ValueError("ALCHEMY_API_KEY not found in .env file")
 
-# --- Alchemy MCP Client Implementation ---
-class AlchemyMCPClient:
+
+# --- MCP Manager Implementation ---
+class MCPManager:
     """
-    Alchemy MCP Client for blockchain investigation.
-    Uses Alchemy MCP server to interact with Ethereum blockchain.
+    MCP Manager for blockchain investigation.
+    Manages multiple MCP clients and coordinates interactions.
     """
 
     def __init__(self, ctx: Context):
         self._ctx = ctx
-        self._session = None
-        self._exit_stack = AsyncExitStack()
-        self.tools = []  # Will be populated after connection
-        self.resolved_ens_cache = {}  # Cache for ENS resolution
+        self.registry = MCPRegistry()
+        self.rag_engine = None
+        self.knowledge_graph = None
+        self._initialized = False
+        self.current_network = None  # Track the currently detected network
 
-    async def connect(self):
-        """Connect to Alchemy MCP server via local npx execution"""
+    async def initialize(self):
+        """Initialize and connect all MCP clients"""
+        if self._initialized:
+            return True
+
+        # Register and connect Alchemy client
+        await self._setup_alchemy_client()
+
+        # Register and connect TheGraph client if API key available
+        if GRAPH_MARKET_ACCESS_TOKEN:
+            await self._setup_thegraph_client()
+
+        # Register and connect Hedera client if credentials available
+        if HEDERA_ACCOUNT_ID and HEDERA_PRIVATE_KEY:
+            await self._setup_hedera_client()
+
+        # Initialize enhanced RAG engine with blockchain-specific knowledge and graph
+        knowledge_base = MeTTaKnowledgeBase()
+        self.knowledge_graph = BlockchainKnowledgeGraph("block_police_knowledge")
+
+        # Add blockchain-specific knowledge documents
         try:
-            self._ctx.logger.info("Connecting to Alchemy MCP server via npx...")
-
-            # Use npx to run Alchemy MCP server locally
-            params = StdioServerParameters(
-                command="npx",
-                args=["-y", "@alchemy/mcp-server"],
-                env={"ALCHEMY_API_KEY": ALCHEMY_API_KEY}
-            )
-
-            read_stream, write_stream = await self._exit_stack.enter_async_context(
-                stdio_client(params)
-            )
-
-            self._session = await self._exit_stack.enter_async_context(
-                mcp.ClientSession(read_stream, write_stream)
-            )
-
-            await self._session.initialize()
-
-            # List available tools
-            list_tools_result = await self._session.list_tools()
-            self.tools = list_tools_result.tools
-
-            self._ctx.logger.info(f"Connected to Alchemy MCP server with {len(self.tools)} tools")
-            for tool in self.tools:
-                self._ctx.logger.info(f"Available tool: {tool.name}")
-
+            knowledge_base.add_document({
+                "title": "Hedera Token Service",
+                "content": "Hedera Token Service (HTS) enables the configuration, minting, and management of fungible and non-fungible tokens on the Hedera network without smart contracts."
+            })
+            knowledge_base.add_document({
+                "title": "Hedera Account IDs",
+                "content": "Hedera accounts are identified by a unique account ID in the format of 0.0.X where X is a unique number."
+            })
+            knowledge_base.add_document({
+                "title": "EVM Fund Tracing",
+                "content": "Fund tracing on EVM chains follows transaction paths across multiple hops to identify potential destinations of crypto assets."
+            })
+            knowledge_base.add_document({
+                "title": "Blockchain Networks",
+                "content": "Different blockchain networks have distinct characteristics. Ethereum is the primary EVM chain, while Polygon, Arbitrum and others are Layer 2 solutions with lower fees. Hedera uses a different consensus mechanism called hashgraph."
+            })
+            knowledge_base.add_document({
+                "title": "Token Standards",
+                "content": "ERC-20 is the standard for fungible tokens, while ERC-721 and ERC-1155 are used for non-fungible tokens (NFTs). Hedera uses its own token standard via the Hedera Token Service."
+            })
+            knowledge_base.add_document({
+                "title": "Cross-Chain Operations",
+                "content": "Assets can be bridged between different blockchains using specialized protocols. These bridges maintain liquidity on both chains and facilitate the transfer of tokens across networks."
+            })
         except Exception as e:
-            self._ctx.logger.error(f"Failed to connect to Alchemy MCP server: {e}")
-            raise
+            self._ctx.logger.error(f"Error adding knowledge to MeTTa: {e}")
+
+        # Use enhanced RAG with both knowledge base and knowledge graph
+        self.rag_engine = EnhancedMeTTaRAG(knowledge_base, self.knowledge_graph)
+
+        self._initialized = True
+        return True
+
+    async def _setup_alchemy_client(self):
+        """Set up and connect to Alchemy MCP server"""
+        self._ctx.logger.info("Setting up Alchemy MCP client...")
+
+        # Create and register Alchemy client
+        alchemy_config = MCPClientConfig(
+            name="alchemy",
+            api_key=ALCHEMY_API_KEY,
+            command="npx",
+            args=["-y", "@alchemy/mcp-server"],
+            env_vars={"ALCHEMY_API_KEY": ALCHEMY_API_KEY}
+        )
+
+        # Create client through registry
+        alchemy_client = self.registry.create_client("alchemy", alchemy_config)
+
+        if not alchemy_client:
+            self._ctx.logger.error("Failed to create Alchemy MCP client")
+            return False
+
+        # Connect to Alchemy MCP server
+        try:
+            success = await alchemy_client.connect()
+            if success:
+                self._ctx.logger.info("Connected to Alchemy MCP server")
+                return True
+            else:
+                self._ctx.logger.error("Failed to connect to Alchemy MCP server")
+                return False
+        except Exception as e:
+            self._ctx.logger.error(f"Error connecting to Alchemy MCP server: {e}")
+            return False
+
+    async def _setup_thegraph_client(self):
+        """Set up and connect to TheGraph Token API MCP server"""
+        self._ctx.logger.info("Setting up TheGraph MCP client...")
+
+        # Create and register TheGraph client
+        thegraph_config = MCPClientConfig(
+            name="thegraph",
+            api_key=GRAPH_MARKET_ACCESS_TOKEN,
+            endpoint=THEGRAPH_TOKEN_API_MCP
+        )
+
+        # Create client through registry
+        thegraph_client = self.registry.create_client("thegraph", thegraph_config)
+
+        if not thegraph_client:
+            self._ctx.logger.error("Failed to create TheGraph MCP client")
+            return False
+
+        # Connect to TheGraph MCP server
+        try:
+            success = await thegraph_client.connect()
+            if success:
+                self._ctx.logger.info("Connected to TheGraph MCP server")
+                return True
+            else:
+                self._ctx.logger.error("Failed to connect to TheGraph MCP server")
+                return False
+        except Exception as e:
+            self._ctx.logger.error(f"Error connecting to TheGraph MCP server: {e}")
+            return False
+
+    async def _setup_hedera_client(self):
+        """Set up and connect to Hedera MCP server"""
+        self._ctx.logger.info("Setting up Hedera MCP client...")
+
+        # Create and register Hedera client
+        hedera_config = MCPClientConfig(
+            name="hedera",
+            api_key=HEDERA_PRIVATE_KEY,
+            command="npx",
+            args=[
+                "-y",
+                "hedera-mcp",
+                f"--hedera_account_id={HEDERA_ACCOUNT_ID}",
+                f"--hedera_private_key={HEDERA_PRIVATE_KEY}",
+                f"--hedera_network={HEDERA_NETWORK}"
+            ],
+            env_vars={"HEDERA_ACCOUNT_ID": HEDERA_ACCOUNT_ID, "HEDERA_PRIVATE_KEY": HEDERA_PRIVATE_KEY}
+        )
+
+        # Create client through registry
+        hedera_client = self.registry.create_client("hedera", hedera_config)
+
+        if not hedera_client:
+            self._ctx.logger.error("Failed to create Hedera MCP client")
+            return False
+
+        # Connect to Hedera MCP server
+        try:
+            success = await hedera_client.connect()
+            if success:
+                self._ctx.logger.info("Connected to Hedera MCP server")
+                return True
+            else:
+                self._ctx.logger.error("Failed to connect to Hedera MCP server")
+                return False
+        except Exception as e:
+            self._ctx.logger.error(f"Error connecting to Hedera MCP server: {e}")
+            return False
 
     async def resolve_ens_to_address(self, ens_name: str) -> str:
         """
-        Resolve ENS name to address using multiple methods
+        Resolve ENS name to address using all available clients
         Returns the original name if resolution fails
         """
-        # Check cache first
-        if ens_name in self.resolved_ens_cache:
-            return self.resolved_ens_cache[ens_name]
+        # Check if any client has ENS_RESOLUTION capability
+        clients = self.registry.find_clients_with_capability(MCPCapability.ENS_RESOLUTION)
 
-        # Only try to resolve .eth names
-        if not ens_name.endswith(".eth"):
+        if not clients:
+            self._ctx.logger.warning("No clients available with ENS resolution capability")
             return ens_name
 
-        self._ctx.logger.info(f"Resolving ENS name: {ens_name}")
-
-        # First try our custom ENS resolution tool
-        try:
-            self._ctx.logger.info(f"Using custom ENS resolution tool")
-            address = await resolve_ens_name(ens_name)
-
-            # Check if we got a valid address or error message
-            if address and not address.startswith("Error:") and not address.startswith("No data"):
-                self._ctx.logger.info(f"Successfully resolved {ens_name} to {address} using custom tool")
-                # Cache the result
-                self.resolved_ens_cache[ens_name] = address
-                return address
-        except Exception as e:
-            self._ctx.logger.error(f"Error with custom ENS resolution: {e}")
-
-        # Try a direct call to eth_getBalance as a secondary method
-        # Some providers handle ENS resolution internally
-        try:
-            self._ctx.logger.info("Trying direct eth_getBalance to see if the provider handles ENS")
-            result = await self._session.call_tool(
-                "eth_getBalance",
-                {"address": ens_name, "tag": "latest"}
-            )
-
-            if hasattr(result, 'content') and result.content:
-                self._ctx.logger.info(f"Provider can handle ENS directly, using {ens_name} as is")
-                # Since the provider can handle ENS directly, cache the original name
-                self.resolved_ens_cache[ens_name] = ens_name
-                return ens_name
-        except Exception as e:
-            self._ctx.logger.error(f"Direct eth_getBalance with ENS failed: {e}")
-
-        # Fall back to Alchemy MCP methods if custom resolution fails
-        # Methods to try in order of preference
-        methods_to_try = [
-            {"method": "ens_getAddress", "params": {"name": ens_name}},
-            {"method": "eth_resolveENS", "params": {"ensName": ens_name}},
-            {"method": "alchemy_resolveENS", "params": {"ens": ens_name}}
-        ]
-
-        for method_info in methods_to_try:
-            method = method_info["method"]
-            params = method_info["params"]
-
+        # Try each client in sequence
+        for client in clients:
             try:
-                self._ctx.logger.info(f"Trying ENS resolution method: {method}")
-                result = await self._session.call_tool(method, params)
-
-                if hasattr(result, 'content') and result.content:
-                    address = result.content
-                    self._ctx.logger.info(f"Successfully resolved {ens_name} to {address} using {method}")
-                    # Cache the result
-                    self.resolved_ens_cache[ens_name] = address
-                    return address
+                if hasattr(client, "resolve_ens_to_address"):
+                    result = await client.resolve_ens_to_address(ens_name)
+                    if result != ens_name:
+                        self._ctx.logger.info(f"Resolved {ens_name} to {result} using {client.name}")
+                        return result
             except Exception as e:
-                self._ctx.logger.error(f"Error with {method}: {e}")
-
-        # Skip this step as we already tried direct eth_getBalance above
+                self._ctx.logger.error(f"Error resolving ENS with {client.name}: {e}")
+                continue
 
         # If all resolution methods fail, return the original ENS name
-        self._ctx.logger.warning(f"Failed to resolve {ens_name}, using as is")
+        self._ctx.logger.warning(f"Failed to resolve {ens_name} with any client")
         return ens_name
 
     async def trace_evm_funds(self, start_address: str, hop_limit: int = 100) -> Dict[str, Any]:
         """
         Traces the path of funds across EVM transactions, hop by hop.
-        Uses Alchemy MCP server tools directly.
+        Uses MCP client with FUND_TRACING capability.
         """
+        # Resolve ENS if needed
+        address = await self.resolve_ens_to_address(start_address)
+
+        # Find clients with FUND_TRACING capability
+        clients = self.registry.find_clients_with_capability(MCPCapability.FUND_TRACING)
+
+        if not clients:
+            return {"error": "No clients available with fund tracing capability",
+                   "source_address": start_address}
+
+        # Use the first available client
+        client = clients[0]
+
         try:
-            self._ctx.logger.info(f"Tracing funds from address: {start_address}")
-
-            # Resolve ENS if needed
-            address = await self.resolve_ens_to_address(start_address)
-
-            # Check which tools are available for tracing
-            trace_tools = [tool for tool in self.tools if 'trace' in tool.name.lower()]
-
-            if not trace_tools:
-                # If no specific trace tools, use getAssetTransfers
-                self._ctx.logger.info("Using getAssetTransfers for tracing")
-                result = await self._session.call_tool(
-                    "alchemy_getAssetTransfers",
-                    {
-                        "fromAddress": address,
-                        "category": ["external", "internal", "erc20", "erc721", "erc1155"],
-                        "maxCount": "0x" + format(hop_limit, 'x')
-                    }
-                )
-
-                # Process the result to create a trace path
-                if hasattr(result, 'content') and result.content:
-                    transfers = result.content.get('transfers', [])
-
-                    if transfers and len(transfers) > 0:
-                        # Find the last hop (simplified approach)
-                        last_transfer = transfers[-1]
-                        exit_hop_address = last_transfer.get('to', 'Unknown')
-
-                        return {
-                            "source_address": start_address,
-                            "exit_hop_address": exit_hop_address,
-                            "transfers": transfers,
-                            "hops_traced": len(transfers)
-                        }
+            if hasattr(client, "trace_evm_funds"):
+                result = await client.trace_evm_funds(address, hop_limit)
+                return result
             else:
-                # Use available trace tools
-                trace_tool = trace_tools[0]
-                self._ctx.logger.info(f"Using trace tool: {trace_tool.name}")
-
-                result = await self._session.call_tool(
-                    trace_tool.name,
-                    {"address": address, "limit": hop_limit}
-                )
-
-                if hasattr(result, 'content'):
-                    return result.content
-
-            return {"error": "Tracing not successful", "source_address": start_address}
-
+                return {"error": "Client does not support trace_evm_funds method",
+                       "source_address": start_address}
         except Exception as e:
             self._ctx.logger.error(f"Error tracing funds: {e}")
-            return {"error": f"Error tracing funds: {str(e)}", "source_address": start_address}
+            return {"error": f"Error tracing funds: {str(e)}",
+                   "source_address": start_address}
 
     async def get_curated_holdings(self, address_or_ens: str) -> Dict[str, Any]:
         """
         Retrieves a multi-chain assessment of crypto holdings for an address or ENS.
-        Uses Alchemy MCP server tools directly.
+        Uses MCP client with ACCOUNT_HOLDINGS capability.
         """
+        # Resolve ENS if needed
+        address = await self.resolve_ens_to_address(address_or_ens)
+
+        # Find clients with ACCOUNT_HOLDINGS capability
+        clients = self.registry.find_clients_with_capability(MCPCapability.ACCOUNT_HOLDINGS)
+
+        if not clients:
+            return {"error": "No clients available with holdings capability",
+                   "address": address_or_ens}
+
+        # Use the first available client
+        client = clients[0]
+
         try:
-            self._ctx.logger.info(f"Getting holdings for: {address_or_ens}")
-
-            # Resolve ENS to address if needed
-            address = await self.resolve_ens_to_address(address_or_ens)
-
-            # Get ETH balance - Using params object instead of array
-            balance_result = await self._session.call_tool(
-                "eth_getBalance",
-                {"address": address, "tag": "latest"}
-            )
-
-            # Get token balances
-            token_balances_result = await self._session.call_tool(
-                "alchemy_getTokenBalances",
-                {"address": address}
-            )
-
-            # Get NFTs if the tool is available
-            nft_tools = [tool for tool in self.tools if 'nft' in tool.name.lower()]
-            nfts = None
-
-            if nft_tools:
-                nft_tool = nft_tools[0]
-                self._ctx.logger.info(f"Using NFT tool: {nft_tool.name}")
-
-                nft_result = await self._session.call_tool(
-                    nft_tool.name,
-                    {"owner": address}
-                )
-
-                if hasattr(nft_result, 'content'):
-                    nfts = nft_result.content
-
-            # Process ETH balance
-            eth_balance = 0
-            if hasattr(balance_result, 'content') and balance_result.content:
-                eth_balance_hex = balance_result.content
-                eth_balance_wei = int(eth_balance_hex, 16) if isinstance(eth_balance_hex, str) else 0
-                eth_balance = eth_balance_wei / 1e18
-
-            # Process token balances
-            tokens = []
-            if hasattr(token_balances_result, 'content') and token_balances_result.content:
-                tokens = token_balances_result.content.get('tokenBalances', [])
-
-            # Prepare response
-            holdings = {
-                "address": address_or_ens,
-                "ETH_Balance": f"{eth_balance:.6f} ETH",
-                "tokens": tokens,
-                "nfts": nfts,
-                "risk_assessment": self._generate_risk_assessment(eth_balance, len(tokens))
-            }
-
-            return holdings
-
+            if hasattr(client, "get_curated_holdings"):
+                result = await client.get_curated_holdings(address)
+                return result
+            else:
+                return {"error": "Client does not support get_curated_holdings method",
+                       "address": address_or_ens}
         except Exception as e:
             self._ctx.logger.error(f"Error getting holdings: {e}")
             return {"error": f"Failed to fetch holdings for {address_or_ens}: {str(e)}"}
 
-    def _generate_risk_assessment(self, eth_balance: float, token_count: int) -> str:
-        """Generate a simplified risk assessment based on holdings"""
-        if eth_balance > 100:
-            return "High value account with significant ETH holdings."
-        elif token_count > 10:
-            return "Diverse portfolio with multiple token types."
-        else:
-            return "Standard account with typical holdings."
+    async def get_token_metadata(self, address: str, chain: str = "ethereum") -> Dict[str, Any]:
+        """Get token metadata using TheGraph Token API"""
+        # Handle network detection
+        if self.current_network and self.current_network.get("network_type") == NetworkType.EVM:
+            network_config = network_manager.get_network_config(self.current_network)
+            chain = network_config.get("name", chain)
+            self._ctx.logger.info(f"Using network {network_manager.format_network_name(chain)} for token metadata")
 
-    async def get_transaction_details(self, tx_hash: str) -> Dict[str, Any]:
-        """
-        Gets detailed information about a specific transaction.
-        Uses Alchemy MCP server tools directly.
-        """
+        clients = self.registry.find_clients_with_capability(MCPCapability.TOKEN_METADATA)
+
+        if not clients:
+            return {"error": "No clients available with token metadata capability"}
+
+        for client in clients:
+            try:
+                if hasattr(client, "get_token_metadata"):
+                    result = await client.get_token_metadata(address, chain)
+                    if result and not result.get("error"):
+                        return result
+            except Exception as e:
+                self._ctx.logger.error(f"Error getting token metadata with {client.name}: {e}")
+                continue
+
+        return {"error": "Failed to get token metadata from any client"}
+
+    async def get_token_holders(self, address: str, limit: int = 10,
+                              chain: str = "ethereum") -> Dict[str, Any]:
+        # Handle network detection
+        if self.current_network and self.current_network.get("network_type") == NetworkType.EVM:
+            network_config = network_manager.get_network_config(self.current_network)
+            chain = network_config.get("name", chain)
+            self._ctx.logger.info(f"Using network {network_manager.format_network_name(chain)} for token holders")
+        """Get token holders using TheGraph Token API"""
+        clients = self.registry.find_clients_with_capability(MCPCapability.TOKEN_BALANCES)
+
+        if not clients:
+            return {"error": "No clients available with token balances capability"}
+
+        for client in clients:
+            try:
+                if hasattr(client, "get_token_holders"):
+                    result = await client.get_token_holders(address, limit, chain)
+                    if result and not result.get("error"):
+                        return result
+            except Exception as e:
+                self._ctx.logger.error(f"Error getting token holders with {client.name}: {e}")
+                continue
+
+        return {"error": "Failed to get token holders from any client"}
+
+    async def get_token_transfers(self, address: str, limit: int = 10,
+                               chain: str = "ethereum") -> Dict[str, Any]:
+        # Handle network detection
+        if self.current_network and self.current_network.get("network_type") == NetworkType.EVM:
+            network_config = network_manager.get_network_config(self.current_network)
+            chain = network_config.get("name", chain)
+            self._ctx.logger.info(f"Using network {network_manager.format_network_name(chain)} for token transfers")
+        """Get token transfers using TheGraph Token API"""
+        clients = self.registry.find_clients_with_capability(MCPCapability.TOKEN_TRANSFERS)
+
+        if not clients:
+            return {"error": "No clients available with token transfers capability"}
+
+        for client in clients:
+            try:
+                if hasattr(client, "get_token_transfers"):
+                    result = await client.get_token_transfers(address, limit, chain)
+                    if result and not result.get("error"):
+                        return result
+            except Exception as e:
+                self._ctx.logger.error(f"Error getting token transfers with {client.name}: {e}")
+                continue
+
+        return {"error": "Failed to get token transfers from any client"}
+
+    async def search_tokens(self, query: str, limit: int = 10,
+                         chain: str = "ethereum") -> Dict[str, Any]:
+        # Handle network detection
+        if self.current_network and self.current_network.get("network_type") == NetworkType.EVM:
+            network_config = network_manager.get_network_config(self.current_network)
+            chain = network_config.get("name", chain)
+            self._ctx.logger.info(f"Using network {network_manager.format_network_name(chain)} for token search")
+        """Search for tokens using TheGraph Token API"""
+        # Find clients with TOKEN_METADATA capability (which can search tokens)
+        clients = self.registry.find_clients_with_capability(MCPCapability.TOKEN_METADATA)
+
+        if not clients:
+            return {"error": "No clients available with token search capability"}
+
+        for client in clients:
+            try:
+                if hasattr(client, "search_tokens"):
+                    result = await client.search_tokens(query, limit, chain)
+                    if result and not result.get("error"):
+                        return result
+            except Exception as e:
+                self._ctx.logger.error(f"Error searching tokens with {client.name}: {e}")
+                continue
+
+        return {"error": "Failed to search tokens with any client"}
+
+    async def get_hedera_balance(self, account_id: str = None) -> Dict[str, Any]:
+        """Get HBAR balance for a Hedera account"""
+        # Handle Hedera network selection
+        hedera_network = HederaNetwork.TESTNET  # Default
+        if self.current_network and self.current_network.get("network_type") == NetworkType.HEDERA:
+            network_config = network_manager.get_network_config(self.current_network)
+            hedera_net = network_config.get("name")
+            for net in HederaNetwork:
+                if net.value == hedera_net:
+                    hedera_network = net
+                    break
+            self._ctx.logger.info(f"Using {network_manager.format_network_name(hedera_network)} for Hedera balance check")
+
+        clients = self.registry.find_clients_with_capability(MCPCapability.HEDERA_TOKEN_TRANSFER)
+
+        if not clients:
+            return {"error": "No Hedera client available"}
+
+        client = clients[0]
+
         try:
-            self._ctx.logger.info(f"Getting transaction details for: {tx_hash}")
-
-            # Note: tx_hash is already a transaction hash, not an ENS name
-            # but we include this check for consistency in case the method
-            # is called with an address parameter that could be ENS
-            if tx_hash.endswith('.eth'):
-                tx_hash = await self.resolve_ens_to_address(tx_hash)
-
-            result = await self._session.call_tool(
-                "eth_getTransactionByHash",
-                {"txHash": tx_hash}
-            )
-
-            if hasattr(result, 'content') and result.content:
-                return result.content
+            if hasattr(client, "get_hbar_balance"):
+                result = await client.get_hbar_balance(account_id)
+                return result
             else:
-                return {"error": "Transaction not found", "tx_hash": tx_hash}
-
+                return {"error": "Hedera client does not support get_hbar_balance method"}
         except Exception as e:
-            self._ctx.logger.error(f"Error getting transaction: {e}")
-            return {"error": f"Failed to fetch transaction details: {str(e)}"}
+            self._ctx.logger.error(f"Error getting Hedera balance: {e}")
+            return {"error": f"Failed to get HBAR balance: {str(e)}"}
+
+    async def get_hedera_token_balances(self, account_id: str = None) -> Dict[str, Any]:
+        """Get all token balances for a Hedera account"""
+        # Handle Hedera network selection
+        hedera_network = HederaNetwork.TESTNET  # Default
+        if self.current_network and self.current_network.get("network_type") == NetworkType.HEDERA:
+            network_config = network_manager.get_network_config(self.current_network)
+            hedera_net = network_config.get("name")
+            for net in HederaNetwork:
+                if net.value == hedera_net:
+                    hedera_network = net
+                    break
+            self._ctx.logger.info(f"Using {network_manager.format_network_name(hedera_network)} for Hedera token balances")
+
+        clients = self.registry.find_clients_with_capability(MCPCapability.HEDERA_TOKEN_TRANSFER)
+
+        if not clients:
+            return {"error": "No Hedera client available"}
+
+        client = clients[0]
+
+        try:
+            if hasattr(client, "get_token_balances"):
+                result = await client.get_token_balances(account_id)
+                return result
+            else:
+                return {"error": "Hedera client does not support get_token_balances method"}
+        except Exception as e:
+            self._ctx.logger.error(f"Error getting Hedera token balances: {e}")
+            return {"error": f"Failed to get token balances: {str(e)}"}
+
+    async def create_hedera_token(self, name: str, symbol: str, initial_supply: int,
+                                decimals: int = 2) -> Dict[str, Any]:
+        """Create a new fungible token on Hedera"""
+        # Handle Hedera network selection
+        hedera_network = HederaNetwork.TESTNET  # Default
+        if self.current_network and self.current_network.get("network_type") == NetworkType.HEDERA:
+            network_config = network_manager.get_network_config(self.current_network)
+            hedera_net = network_config.get("name")
+            for net in HederaNetwork:
+                if net.value == hedera_net:
+                    hedera_network = net
+                    break
+            self._ctx.logger.info(f"Using {network_manager.format_network_name(hedera_network)} for Hedera token creation")
+
+        clients = self.registry.find_clients_with_capability(MCPCapability.HEDERA_TOKEN_CREATE)
+
+        if not clients:
+            return {"error": "No Hedera client available"}
+
+        client = clients[0]
+
+        try:
+            if hasattr(client, "create_fungible_token"):
+                result = await client.create_fungible_token(name, symbol, initial_supply, decimals)
+                return result
+            else:
+                return {"error": "Hedera client does not support create_fungible_token method"}
+        except Exception as e:
+            self._ctx.logger.error(f"Error creating Hedera token: {e}")
+            return {"error": f"Failed to create token: {str(e)}"}
+
+    async def transfer_hedera_token(self, token_id: str, to_account: str,
+                                  amount: float) -> Dict[str, Any]:
+        """Transfer tokens on Hedera"""
+        # Handle Hedera network selection
+        hedera_network = HederaNetwork.TESTNET  # Default
+        if self.current_network and self.current_network.get("network_type") == NetworkType.HEDERA:
+            network_config = network_manager.get_network_config(self.current_network)
+            hedera_net = network_config.get("name")
+            for net in HederaNetwork:
+                if net.value == hedera_net:
+                    hedera_network = net
+                    break
+            self._ctx.logger.info(f"Using {network_manager.format_network_name(hedera_network)} for Hedera token transfer")
+
+        clients = self.registry.find_clients_with_capability(MCPCapability.HEDERA_TOKEN_TRANSFER)
+
+        if not clients:
+            return {"error": "No Hedera client available"}
+
+        client = clients[0]
+
+        try:
+            if hasattr(client, "transfer_token"):
+                result = await client.transfer_token(token_id, to_account, amount)
+                return result
+            else:
+                return {"error": "Hedera client does not support transfer_token method"}
+        except Exception as e:
+            self._ctx.logger.error(f"Error transferring Hedera token: {e}")
+            return {"error": f"Failed to transfer token: {str(e)}"}
+
+    async def query_with_rag(self, query: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Query the enhanced RAG engine for intelligent insights"""
+        if not self.rag_engine:
+            return {"error": "RAG engine not initialized"}
+
+        try:
+            # Determine query type based on context or default to blockchain_investigation
+            query_type = context.get("query_type", "blockchain_investigation")
+
+            # Use the enhanced RAG to get an answer
+            result = await self.rag_engine.query(query, context, query_type)
+
+            # Update knowledge graph with new information from this query
+            if self.knowledge_graph:
+                await self.rag_engine.update_knowledge_from_query(query, context, result)
+
+            return result
+        except Exception as e:
+            self._ctx.logger.error(f"Error querying RAG engine: {e}")
+            return {"error": f"Failed to query RAG engine: {str(e)}"}
+
+    async def create_nft_on_hedera(self, name: str, symbol: str, max_supply: int = None) -> Dict[str, Any]:
+        """Create a new NFT collection on Hedera"""
+        # Handle Hedera network selection
+        hedera_network = HederaNetwork.TESTNET  # Default
+        if self.current_network and self.current_network.get("network_type") == NetworkType.HEDERA:
+            network_config = network_manager.get_network_config(self.current_network)
+            hedera_net = network_config.get("name")
+            for net in HederaNetwork:
+                if net.value == hedera_net:
+                    hedera_network = net
+                    break
+            self._ctx.logger.info(f"Using {network_manager.format_network_name(hedera_network)} for Hedera NFT creation")
+
+        clients = self.registry.find_clients_with_capability(MCPCapability.HEDERA_NFT_OPERATIONS)
+
+        if not clients:
+            return {"error": "No Hedera client available"}
+
+        client = clients[0]
+
+        try:
+            if hasattr(client, "create_nft"):
+                result = await client.create_nft(name, symbol, max_supply)
+                return result
+            else:
+                return {"error": "Hedera client does not support create_nft method"}
+        except Exception as e:
+            self._ctx.logger.error(f"Error creating NFT collection: {e}")
+            return {"error": f"Failed to create NFT collection: {str(e)}"}
+
+    async def mint_nft_on_hedera(self, token_id: str, metadata: str) -> Dict[str, Any]:
+        """Mint a new NFT on Hedera"""
+        # Handle Hedera network selection
+        hedera_network = HederaNetwork.TESTNET  # Default
+        if self.current_network and self.current_network.get("network_type") == NetworkType.HEDERA:
+            network_config = network_manager.get_network_config(self.current_network)
+            hedera_net = network_config.get("name")
+            for net in HederaNetwork:
+                if net.value == hedera_net:
+                    hedera_network = net
+                    break
+            self._ctx.logger.info(f"Using {network_manager.format_network_name(hedera_network)} for Hedera NFT minting")
+
+        clients = self.registry.find_clients_with_capability(MCPCapability.HEDERA_NFT_OPERATIONS)
+
+        if not clients:
+            return {"error": "No Hedera client available"}
+
+        client = clients[0]
+
+        try:
+            if hasattr(client, "mint_nft"):
+                result = await client.mint_nft(token_id, metadata)
+                return result
+            else:
+                return {"error": "Hedera client does not support mint_nft method"}
+        except Exception as e:
+            self._ctx.logger.error(f"Error minting NFT: {e}")
+            return {"error": f"Failed to mint NFT: {str(e)}"}
+
+    async def associate_hedera_token(self, token_id: str, account_id: str = None) -> Dict[str, Any]:
+        """Associate a token with an account on Hedera"""
+        # Handle Hedera network selection
+        hedera_network = HederaNetwork.TESTNET  # Default
+        if self.current_network and self.current_network.get("network_type") == NetworkType.HEDERA:
+            network_config = network_manager.get_network_config(self.current_network)
+            hedera_net = network_config.get("name")
+            for net in HederaNetwork:
+                if net.value == hedera_net:
+                    hedera_network = net
+                    break
+            self._ctx.logger.info(f"Using {network_manager.format_network_name(hedera_network)} for Hedera token association")
+
+        clients = self.registry.find_clients_with_capability(MCPCapability.HEDERA_TOKEN_ASSOCIATE)
+
+        if not clients:
+            return {"error": "No Hedera client available"}
+
+        client = clients[0]
+
+        try:
+            if hasattr(client, "associate_token"):
+                result = await client.associate_token(token_id, account_id)
+                return result
+            else:
+                return {"error": "Hedera client does not support associate_token method"}
+        except Exception as e:
+            self._ctx.logger.error(f"Error associating token: {e}")
+            return {"error": f"Failed to associate token: {str(e)}"}
 
     async def cleanup(self):
-        """Clean up the MCP connection"""
-        try:
-            if self._exit_stack:
-                await self._exit_stack.aclose()
-            self._ctx.logger.info("Alchemy MCP client cleaned up")
-        except Exception as e:
-            self._ctx.logger.error(f"Error during cleanup: {e}")
+        """Clean up all MCP clients"""
+        clients = self.registry.get_all_clients()
+
+        for client in clients:
+            try:
+                await client.cleanup()
+            except Exception as e:
+                self._ctx.logger.error(f"Error cleaning up {client.name}: {e}")
+
 
 # --- Chat Protocol Setup ---
 from uagents_core.contrib.protocols.chat import (
@@ -331,7 +669,7 @@ from uagents_core.contrib.protocols.chat import (
     StartSessionContent,
 )
 
-# User sessions store: session_id -> {client, last_activity}
+# User sessions store: session_id -> {mcp_manager, last_activity}
 user_sessions = {}
 
 # Session timeout (30 minutes)
@@ -339,7 +677,7 @@ SESSION_TIMEOUT = 30 * 60
 
 # --- Agent Setup ---
 chat_proto = Protocol(spec=chat_protocol_spec)
-agent = Agent(name="block_police_agent", port=8001, mailbox=True)
+agent = Agent(name="Block Police", port=8002, mailbox=True)
 
 def create_text_chat(text: str, end_session: bool = False) -> ChatMessage:
     """Helper to create a chat message with text content"""
@@ -366,18 +704,18 @@ def is_session_valid(session_id: str) -> bool:
 
     return True
 
-async def get_alchemy_client(ctx: Context, session_id: str) -> AlchemyMCPClient:
-    """Get or create Alchemy MCP client for session"""
+async def get_mcp_manager(ctx: Context, session_id: str) -> MCPManager:
+    """Get or create MCP Manager for session"""
     if session_id not in user_sessions or not is_session_valid(session_id):
-        # Create new client
-        client = AlchemyMCPClient(ctx)
-        await client.connect()
+        # Create new manager
+        manager = MCPManager(ctx)
+        await manager.initialize()
         user_sessions[session_id] = {
-            'client': client,
+            'manager': manager,
             'last_activity': time.time()
         }
 
-    return user_sessions[session_id]['client']
+    return user_sessions[session_id]['manager']
 
 @chat_proto.on_message(ChatMessage)
 async def handle_chat_message(ctx: Context, sender: str, msg: ChatMessage):
@@ -404,13 +742,21 @@ I can help you investigate blockchain transactions, trace funds, and analyze wal
 - Get holdings for an address or ENS name
 - Get transaction details
 - Get ENS domain details
-- Get ENS domain details
 - Get ENS domain events history
 - Get token metadata
 - Get token holders
 - Get token transfers
 - Search for tokens
 - Monitor suspicious activities
+
+**Hedera Blockchain Operations:**
+- Get Hedera account balance
+- Get Hedera token balances
+- Create token on Hedera
+- Transfer tokens on Hedera
+- Create NFT on Hedera
+- Mint NFT on Hedera
+- Associate tokens on Hedera
 
 How can I assist with your blockchain investigation today?"""
 
@@ -430,11 +776,11 @@ How can I assist with your blockchain investigation today?"""
             await ctx.send(sender, processing_msg)
 
             try:
-                # Get Alchemy client for this session
-                client = await get_alchemy_client(ctx, session_id)
+                # Get MCP manager for this session
+                manager = await get_mcp_manager(ctx, session_id)
 
                 # Process based on query content
-                response_text = await process_blockchain_query(ctx, client, query)
+                response_text = await process_blockchain_query(ctx, manager, query)
 
             except Exception as e:
                 ctx.logger.error(f"Error processing query: {e}")
@@ -452,106 +798,339 @@ async def handle_chat_ack(ctx: Context, sender: str, msg: ChatAcknowledgement):
     """Handle chat acknowledgements"""
     pass
 
-async def process_blockchain_query(ctx: Context, client: AlchemyMCPClient, query: str) -> str:
+async def process_blockchain_query(ctx: Context, manager: MCPManager, query: str) -> str:
     """Process blockchain investigation query"""
     query_lower = query.lower()
 
-    # Check for ENS domain details request
-    if any(phrase in query_lower for phrase in ['ens details', 'domain details', 'ens info', 'domain info']):
+    # Detect network from query
+    detected_network = network_manager.identify_network_from_query(query)
+    manager.current_network = detected_network
+    network_type = detected_network.get("network_type")
+    network = detected_network.get("network")
+
+    ctx.logger.info(f"Detected network: {network_manager.format_network_name(network)} (Type: {network_type.value if isinstance(network_type, NetworkType) else network_type})")
+
+    # First check if we can use RAG to get a better understanding
+    rag_context = {
+        "query": query,
+        "query_type": "blockchain_investigation",
+        "network": network_manager.format_network_name(network),
+        "network_type": network_type.value if isinstance(network_type, NetworkType) else network_type
+    }
+    rag_result = await manager.query_with_rag(query, rag_context)
+    if isinstance(rag_result, dict) and "answer" in rag_result and rag_result["answer"].get("result"):
+        ctx.logger.info(f"RAG provided insight for query: {query}")
+
+    # Check for Hedera token balances queries
+    if any(phrase in query_lower for phrase in ['hedera token balances', 'hedera tokens']):
+        account_id = None
+
+        # Try to extract account ID if provided
         import re
-        ens_match = re.search(r'[a-zA-Z0-9_-]+\.eth', query)
+        account_match = re.search(r'0\.0\.\d+', query)
+        if account_match:
+            account_id = account_match.group(0)
 
-        if ens_match:
-            ens_name = ens_match.group(0)
-            ctx.logger.info(f"Detected ENS details request for: {ens_name}")
+        ctx.logger.info(f"Detected Hedera token balances request for account: {account_id}")
 
-            try:
-                domain_details = await get_domain_details(ens_name)
+        result = await manager.get_hedera_token_balances(account_id)
 
-                if isinstance(domain_details, dict) and "error" in domain_details:
-                    return f"""❌ **ENS Domain Analysis Failed**
+        if isinstance(result, dict) and "error" in result:
+            return f"""❌ **Hedera Token Balances Query Failed**
 
-Unable to get details for {ens_name}:
-{domain_details.get('error', 'Unknown error')}
+{result.get('error', 'Unknown error')}
 
-Please verify the ENS name is correct and try again."""
+Please verify your Hedera account ID is correct."""
 
-                return f"""📋 **ENS Domain Details**
+        # Format the result
+        tokens = result.get("tokens", [])
+        account = result.get("account", account_id or "Default account")
 
-**Name:** {ens_name}
-**Address:** {domain_details.get('address', 'None')}
-**Owner:** {domain_details.get('owner', 'None')}
-**Created:** {domain_details.get('created', 'Unknown')}
-**Expiry:** {domain_details.get('expiry', 'Unknown')}
-**Subdomain Count:** {domain_details.get('subdomainCount', '0')}
+        if not tokens:
+            return f"""💰 **Hedera Token Balances**
 
-*For more detailed information, please use a specialized ENS lookup service.*"""
+**Account ID:** {account}
+**Tokens:** No tokens found for this account
 
-            except Exception as e:
-                ctx.logger.error(f"Error getting ENS details: {e}")
-                return f"""❌ **ENS Domain Analysis Failed**
+*This data is provided by the Hedera network.*"""
 
-Encountered an error while fetching details for {ens_name}:
-{str(e)}
+        # Format token list
+        token_list = "\n".join([f"**{t.get('tokenId', 'Unknown')}**: {t.get('balance', '0')}" for t in tokens[:10]])
 
-Please try again later."""
+        return f"""💰 **Hedera Token Balances**
+
+**Account ID:** {account}
+**Tokens:** {len(tokens)}
+
+{token_list}
+
+*This data is provided by the Hedera network.*"""
+
+    # Check for Hedera balance queries
+    elif any(phrase in query_lower for phrase in ['hedera balance', 'hbar balance']):
+        account_id = None
+
+        # Try to extract account ID if provided
+        import re
+        account_match = re.search(r'0\.0\.\d+', query)
+        if account_match:
+            account_id = account_match.group(0)
+
+        ctx.logger.info(f"Detected Hedera balance request for account: {account_id}")
+
+        result = await manager.get_hedera_balance(account_id)
+
+        if isinstance(result, dict) and "error" in result:
+            return f"""❌ **Hedera Balance Query Failed**
+
+{result.get('error', 'Unknown error')}
+
+Please verify your Hedera account ID is correct."""
+
+        # Format the result
+        balance = result.get("balance", "0")
+        account = result.get("account", account_id or "Default account")
+
+        return f"""💰 **Hedera Account Balance**
+
+**Account ID:** {account}
+**HBAR Balance:** {balance}
+
+*This data is provided by the Hedera network.*"""
+
+    # Check for Hedera token creation queries
+    elif any(phrase in query_lower for phrase in ['create hedera token', 'create token on hedera']):
+        import re
+
+        # Extract token name, symbol and initial supply
+        name_match = re.search(r'name[d:]?\s+["\']?([^"\']+)["\']?', query_lower)
+        symbol_match = re.search(r'symbol[:]?\s+["\']?([^"\']+)["\']?', query_lower)
+        supply_match = re.search(r'supply[:]?\s+(\d+)', query_lower)
+        decimals_match = re.search(r'decimals[:]?\s+(\d+)', query_lower)
+
+        if name_match and symbol_match and supply_match:
+            name = name_match.group(1)
+            symbol = symbol_match.group(1)
+            initial_supply = int(supply_match.group(1))
+            decimals = int(decimals_match.group(1)) if decimals_match else 2
+
+            ctx.logger.info(f"Creating Hedera token: {name} ({symbol})")
+
+            result = await manager.create_hedera_token(name, symbol, initial_supply, decimals)
+
+            if isinstance(result, dict) and "error" in result:
+                return f"""❌ **Token Creation Failed**
+
+{result.get('error', 'Unknown error')}
+
+Please verify your Hedera credentials and parameters."""
+
+            # Format the result
+            token_id = result.get("tokenId", "Unknown")
+
+            return f"""✅ **Hedera Token Created Successfully**
+
+**Token Name:** {name}
+**Token Symbol:** {symbol}
+**Token ID:** {token_id}
+**Initial Supply:** {initial_supply}
+**Decimals:** {decimals}
+
+Your token has been created on the Hedera network."""
 
         else:
-            return """⚠️ **ENS Name Not Detected**
+            return """⚠️ **Insufficient Token Information**
 
-I need a valid ENS name to check domain details.
-Please provide a query with a valid ENS name (name.eth).
+To create a Hedera token, I need:
+- Token name (e.g., "name: My Token")
+- Token symbol (e.g., "symbol: MTK")
+- Initial supply (e.g., "supply: 1000000")
+- Optional: Decimals (e.g., "decimals: 2") - defaults to 2
 
-Example: "Get ENS details for vitalik.eth\""""
+Example: "Create a token on Hedera with name: My Token, symbol: MTK, supply: 1000000"."""
 
-    # Check for ENS domain events request
-    elif any(phrase in query_lower for phrase in ['ens events', 'domain events', 'ens history', 'domain history']):
+    # Check for Hedera token transfer queries
+    elif any(phrase in query_lower for phrase in ['transfer hedera token', 'send hedera token']):
         import re
-        ens_match = re.search(r'[a-zA-Z0-9_-]+\.eth', query)
 
-        if ens_match:
-            ens_name = ens_match.group(0)
-            ctx.logger.info(f"Detected ENS events request for: {ens_name}")
+        # Extract token ID, recipient and amount
+        token_match = re.search(r'token[:]?\s+([0-9.]+)', query)
+        recipient_match = re.search(r'to[:]?\s+(0\.0\.\d+)', query)
+        amount_match = re.search(r'amount[:]?\s+(\d+(?:\.\d+)?)', query)
 
-            try:
-                events = await get_domain_events(ens_name)
+        if token_match and recipient_match and amount_match:
+            token_id = token_match.group(1)
+            recipient = recipient_match.group(1)
+            amount = float(amount_match.group(1))
 
-                if isinstance(events, list) and len(events) > 0 and "error" in events[0]:
-                    return f"""❌ **ENS Domain Events Failed**
+            ctx.logger.info(f"Transferring Hedera token: {token_id} to {recipient}")
 
-Unable to get events for {ens_name}:
-{events[0].get('error', 'Unknown error')}
+            result = await manager.transfer_hedera_token(token_id, recipient, amount)
 
-Please verify the ENS name is correct and try again."""
+            if isinstance(result, dict) and "error" in result:
+                return f"""❌ **Token Transfer Failed**
 
-                event_count = len(events)
-                return f"""📜 **ENS Domain Events**
+{result.get('error', 'Unknown error')}
 
-**Name:** {ens_name}
-**Total Events:** {event_count}
+Please verify your token ID, recipient account, and amount."""
 
-**Recent Events:**
-{', '.join([event.get('type', 'Unknown') for event in events[:5]])}...
+            # Format the result
+            tx_id = result.get("transactionId", "Unknown")
 
-*For a complete event history, please use a specialized ENS lookup service.*"""
+            return f"""✅ **Hedera Token Transfer Complete**
 
-            except Exception as e:
-                ctx.logger.error(f"Error getting ENS events: {e}")
-                return f"""❌ **ENS Domain Events Failed**
+**Token ID:** {token_id}
+**Recipient:** {recipient}
+**Amount:** {amount}
+**Transaction ID:** {tx_id}
 
-Encountered an error while fetching events for {ens_name}:
-{str(e)}
-
-Please try again later."""
+The token transfer has been processed on the Hedera network."""
 
         else:
-            return """⚠️ **ENS Name Not Detected**
+            return """⚠️ **Insufficient Transfer Information**
 
-I need a valid ENS name to check domain events.
-Please provide a query with a valid ENS name (name.eth).
+To transfer a Hedera token, I need:
+- Token ID (e.g., "token: 0.0.1234")
+- Recipient account (e.g., "to: 0.0.5678")
+- Amount to transfer (e.g., "amount: 100")
 
-Example: "Get ENS events for vitalik.eth\""""
+Example: "Transfer Hedera token: 0.0.1234 to: 0.0.5678 amount: 100"."""
 
+    # Check for Hedera NFT creation queries
+    elif any(phrase in query_lower for phrase in ['create nft on hedera', 'create hedera nft', 'new nft on hedera']):
+        import re
+
+        # Extract NFT collection name and symbol
+        name_match = re.search(r'name[d:]?\s+["\']?([^"\']+)["\']?', query_lower)
+        symbol_match = re.search(r'symbol[:]?\s+["\']?([^"\']+)["\']?', query_lower)
+        supply_match = re.search(r'max[_\s]?supply[:]?\s+(\d+)', query_lower)
+
+        if name_match and symbol_match:
+            name = name_match.group(1)
+            symbol = symbol_match.group(1)
+            max_supply = int(supply_match.group(1)) if supply_match else None
+
+            ctx.logger.info(f"Creating NFT collection on Hedera: {name} ({symbol})")
+
+            result = await manager.create_nft_on_hedera(name, symbol, max_supply)
+
+            if isinstance(result, dict) and "error" in result:
+                return f"""❌ **NFT Collection Creation Failed**
+
+{result.get('error', 'Unknown error')}
+
+Please verify your Hedera credentials and parameters."""
+
+            # Format the result
+            token_id = result.get("tokenId", "Unknown")
+
+            return f"""✅ **Hedera NFT Collection Created Successfully**
+
+**Collection Name:** {name}
+**Collection Symbol:** {symbol}
+**Token ID:** {token_id}
+**Max Supply:** {max_supply if max_supply else "Unlimited"}
+
+Your NFT collection has been created on the Hedera network."""
+
+        else:
+            return """⚠️ **Insufficient NFT Collection Information**
+
+To create a Hedera NFT collection, I need:
+- Collection name (e.g., "name: My NFT Collection")
+- Collection symbol (e.g., "symbol: MNFT")
+- Optional: Maximum supply (e.g., "max_supply: 1000")
+
+Example: "Create an NFT on Hedera with name: My Art Collection, symbol: MAC"."""
+
+    # Check for Hedera NFT minting queries
+    elif any(phrase in query_lower for phrase in ['mint nft on hedera', 'mint hedera nft']):
+        import re
+
+        # Extract token ID and metadata
+        token_match = re.search(r'token[:]?\s+([0-9.]+)', query)
+        metadata_match = re.search(r'metadata[:]?\s+["\']?([^"\']+)["\']?', query)
+
+        if token_match and metadata_match:
+            token_id = token_match.group(1)
+            metadata = metadata_match.group(1)
+
+            ctx.logger.info(f"Minting NFT on Hedera for token: {token_id}")
+
+            result = await manager.mint_nft_on_hedera(token_id, metadata)
+
+            if isinstance(result, dict) and "error" in result:
+                return f"""❌ **NFT Minting Failed**
+
+{result.get('error', 'Unknown error')}
+
+Please verify your token ID and metadata."""
+
+            # Format the result
+            serial_number = result.get("serialNumber", "Unknown")
+            tx_id = result.get("transactionId", "Unknown")
+
+            return f"""✅ **Hedera NFT Minted Successfully**
+
+**Token ID:** {token_id}
+**Serial Number:** {serial_number}
+**Metadata:** {metadata}
+**Transaction ID:** {tx_id}
+
+Your NFT has been minted on the Hedera network."""
+
+        else:
+            return """⚠️ **Insufficient NFT Minting Information**
+
+To mint an NFT on Hedera, I need:
+- Token ID of the NFT collection (e.g., "token: 0.0.1234")
+- Metadata for the NFT (e.g., "metadata: https://example.com/my-nft-metadata.json")
+
+Example: "Mint NFT on Hedera token: 0.0.1234 metadata: ipfs://QmXyZ123..."""
+
+    # Check for Hedera token association queries
+    elif any(phrase in query_lower for phrase in ['associate hedera token', 'associate token on hedera']):
+        import re
+
+        # Extract token ID and account ID
+        token_match = re.search(r'token[:]?\s+([0-9.]+)', query)
+        account_match = re.search(r'account[:]?\s+(0\.0\.\d+)', query)
+
+        if token_match:
+            token_id = token_match.group(1)
+            account_id = account_match.group(1) if account_match else None
+
+            ctx.logger.info(f"Associating token {token_id} with account {account_id if account_id else 'default'}")
+
+            result = await manager.associate_hedera_token(token_id, account_id)
+
+            if isinstance(result, dict) and "error" in result:
+                return f"""❌ **Token Association Failed**
+
+{result.get('error', 'Unknown error')}
+
+Please verify your token ID and account."""
+
+            # Format the result
+            tx_id = result.get("transactionId", "Unknown")
+            account = account_id if account_id else result.get("accountId", "Default account")
+
+            return f"""✅ **Hedera Token Association Complete**
+
+**Token ID:** {token_id}
+**Account:** {account}
+**Transaction ID:** {tx_id}
+
+The token has been associated with the account on the Hedera network."""
+
+        else:
+            return """⚠️ **Insufficient Association Information**
+
+To associate a token on Hedera, I need:
+- Token ID (e.g., "token: 0.0.1234")
+- Optional: Account ID (e.g., "account: 0.0.5678") - uses your default account if not specified
+
+Example: "Associate Hedera token: 0.0.1234"."""
 
     # Check for token metadata queries
     if any(phrase in query_lower for phrase in ['token info', 'token metadata', 'token details']):
@@ -562,15 +1141,15 @@ Example: "Get ENS events for vitalik.eth\""""
             address = address_match.group(0)
             ctx.logger.info(f"Detected token metadata request for: {address}")
 
-            # Extract chain if specified
-            chain = "ethereum"
-            if "polygon" in query_lower or "matic" in query_lower:
-                chain = "polygon"
-            elif "arbitrum" in query_lower:
-                chain = "arbitrum"
+            # Use the detected network
+            chain = "ethereum"  # Default
+            if manager.current_network and manager.current_network.get("network_type") == NetworkType.EVM:
+                network_config = network_manager.get_network_config(manager.current_network)
+                chain = network_config.get("name", "ethereum")
+                ctx.logger.info(f"Using detected network {chain} for token metadata")
 
             try:
-                metadata = await get_token_metadata(address, chain)
+                metadata = await manager.get_token_metadata(address, chain)
 
                 if isinstance(metadata, dict) and "error" in metadata:
                     return f"""❌ **Token Metadata Failed**
@@ -617,12 +1196,12 @@ Example: "Get token details for 0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984\""""
             address = address_match.group(0)
             ctx.logger.info(f"Detected token holders request for: {address}")
 
-            # Extract chain if specified
-            chain = "ethereum"
-            if "polygon" in query_lower or "matic" in query_lower:
-                chain = "polygon"
-            elif "arbitrum" in query_lower:
-                chain = "arbitrum"
+            # Use the detected network
+            chain = "ethereum"  # Default
+            if manager.current_network and manager.current_network.get("network_type") == NetworkType.EVM:
+                network_config = network_manager.get_network_config(manager.current_network)
+                chain = network_config.get("name", "ethereum")
+                ctx.logger.info(f"Using detected network {chain} for token holders")
 
             # Extract limit if specified
             limit = 10
@@ -635,7 +1214,7 @@ Example: "Get token details for 0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984\""""
                     pass
 
             try:
-                holders = await get_token_holders(address, limit, chain)
+                holders = await manager.get_token_holders(address, limit, chain)
 
                 if isinstance(holders, dict) and "error" in holders:
                     return f"""❌ **Token Holders Query Failed**
@@ -688,12 +1267,12 @@ Example: "Get top holders for 0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984\""""
             address = address_match.group(0)
             ctx.logger.info(f"Detected token transfers request for: {address}")
 
-            # Extract chain if specified
-            chain = "ethereum"
-            if "polygon" in query_lower or "matic" in query_lower:
-                chain = "polygon"
-            elif "arbitrum" in query_lower:
-                chain = "arbitrum"
+            # Use the detected network
+            chain = "ethereum"  # Default
+            if manager.current_network and manager.current_network.get("network_type") == NetworkType.EVM:
+                network_config = network_manager.get_network_config(manager.current_network)
+                chain = network_config.get("name", "ethereum")
+                ctx.logger.info(f"Using detected network {chain} for token transfers")
 
             # Extract limit if specified
             limit = 10
@@ -706,7 +1285,7 @@ Example: "Get top holders for 0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984\""""
                     pass
 
             try:
-                transfers = await get_token_transfers(address, limit, chain)
+                transfers = await manager.get_token_transfers(address, limit, chain)
 
                 if isinstance(transfers, dict) and "error" in transfers:
                     return f"""❌ **Token Transfers Query Failed**
@@ -763,15 +1342,15 @@ Example: "Get token transfers for 0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984\"""
             search_term = search_match.group(1).strip()
             ctx.logger.info(f"Detected token search request for: {search_term}")
 
-            # Extract chain if specified
-            chain = "ethereum"
-            if "polygon" in query_lower or "matic" in query_lower:
-                chain = "polygon"
-            elif "arbitrum" in query_lower:
-                chain = "arbitrum"
+            # Use the detected network
+            chain = "ethereum"  # Default
+            if manager.current_network and manager.current_network.get("network_type") == NetworkType.EVM:
+                network_config = network_manager.get_network_config(manager.current_network)
+                chain = network_config.get("name", "ethereum")
+                ctx.logger.info(f"Using detected network {chain} for token search")
 
             try:
-                results = await search_tokens(search_term, 10, chain)
+                results = await manager.search_tokens(search_term, 10, chain)
 
                 if isinstance(results, dict) and "error" in results:
                     return f"""❌ **Token Search Failed**
@@ -824,6 +1403,106 @@ Please provide a query with a clear search term.
 
 Example: "Search for tokens named Uniswap" or "Find tokens with DAI\""""
 
+    # Check for ENS domain details request
+    elif any(phrase in query_lower for phrase in ['ens details', 'domain details', 'ens info', 'domain info']):
+        import re
+        ens_match = re.search(r'[a-zA-Z0-9_-]+\.eth', query)
+
+        if ens_match:
+            ens_name = ens_match.group(0)
+            ctx.logger.info(f"Detected ENS details request for: {ens_name}")
+
+            try:
+                # Use tools.ens directly since we already have it implemented
+                from tools.ens import get_domain_details
+                domain_details = await get_domain_details(ens_name)
+
+                if isinstance(domain_details, dict) and "error" in domain_details:
+                    return f"""❌ **ENS Domain Analysis Failed**
+
+Unable to get details for {ens_name}:
+{domain_details.get('error', 'Unknown error')}
+
+Please verify the ENS name is correct and try again."""
+
+                return f"""📋 **ENS Domain Details**
+
+**Name:** {ens_name}
+**Address:** {domain_details.get('address', 'None')}
+**Owner:** {domain_details.get('owner', 'None')}
+**Created:** {domain_details.get('created', 'Unknown')}
+**Expiry:** {domain_details.get('expiry', 'Unknown')}
+**Subdomain Count:** {domain_details.get('subdomainCount', '0')}
+
+*For more detailed information, please use a specialized ENS lookup service.*"""
+
+            except Exception as e:
+                ctx.logger.error(f"Error getting ENS details: {e}")
+                return f"""❌ **ENS Domain Analysis Failed**
+
+Encountered an error while fetching details for {ens_name}:
+{str(e)}
+
+Please try again later."""
+
+        else:
+            return """⚠️ **ENS Name Not Detected**
+
+I need a valid ENS name to check domain details.
+Please provide a query with a valid ENS name (name.eth).
+
+Example: "Get ENS details for vitalik.eth\""""
+
+    # Check for ENS domain events request
+    elif any(phrase in query_lower for phrase in ['ens events', 'domain events', 'ens history', 'domain history']):
+        import re
+        ens_match = re.search(r'[a-zA-Z0-9_-]+\.eth', query)
+
+        if ens_match:
+            ens_name = ens_match.group(0)
+            ctx.logger.info(f"Detected ENS events request for: {ens_name}")
+
+            try:
+                # Use tools.ens directly since we already have it implemented
+                from tools.ens import get_domain_events
+                events = await get_domain_events(ens_name)
+
+                if isinstance(events, list) and len(events) > 0 and "error" in events[0]:
+                    return f"""❌ **ENS Domain Events Failed**
+
+Unable to get events for {ens_name}:
+{events[0].get('error', 'Unknown error')}
+
+Please verify the ENS name is correct and try again."""
+
+                event_count = len(events)
+                return f"""📜 **ENS Domain Events**
+
+**Name:** {ens_name}
+**Total Events:** {event_count}
+
+**Recent Events:**
+{', '.join([event.get('type', 'Unknown') for event in events[:5]])}...
+
+*For a complete event history, please use a specialized ENS lookup service.*"""
+
+            except Exception as e:
+                ctx.logger.error(f"Error getting ENS events: {e}")
+                return f"""❌ **ENS Domain Events Failed**
+
+Encountered an error while fetching events for {ens_name}:
+{str(e)}
+
+Please try again later."""
+
+        else:
+            return """⚠️ **ENS Name Not Detected**
+
+I need a valid ENS name to check domain events.
+Please provide a query with a valid ENS name (name.eth).
+
+Example: "Get ENS events for vitalik.eth\""""
+
     # Check for trace/tracking queries
     elif any(word in query_lower for word in ['trace', 'track', 'follow', 'stolen', 'theft']):
         # Extract addresses using a simple regex pattern
@@ -834,7 +1513,7 @@ Example: "Search for tokens named Uniswap" or "Find tokens with DAI\""""
             address = address_match.group(0)
             ctx.logger.info(f"Detected trace request for address: {address}")
 
-            result = await client.trace_evm_funds(address)
+            result = await manager.trace_evm_funds(address)
 
             if "error" in result:
                 return f"""❌ **Fund Tracing Failed**
@@ -884,7 +1563,7 @@ Example: "Trace funds from 0x123abc..."
         if target:
             ctx.logger.info(f"Detected holdings request for: {target}")
 
-            result = await client.get_curated_holdings(target)
+            result = await manager.get_curated_holdings(target)
 
             if "error" in result:
                 return f"""❌ **Holdings Analysis Failed**
@@ -931,9 +1610,21 @@ Example: "Check holdings for vitalik.eth"
             tx_hash = tx_match.group(0)
             ctx.logger.info(f"Detected transaction request for: {tx_hash}")
 
-            result = await client.get_transaction_details(tx_hash)
+            # Use Alchemy client directly for now
+            alchemy_client = manager.registry.get_client("alchemy")
+            if not alchemy_client:
+                return """❌ **Transaction Analysis Failed**
 
-            if "error" in result:
+Alchemy client not available for transaction analysis.
+
+Please try again later."""
+
+            result = await alchemy_client.call_tool(
+                "eth_getTransactionByHash",
+                {"txHash": tx_hash}
+            )
+
+            if isinstance(result, dict) and "error" in result:
                 return f"""❌ **Transaction Analysis Failed**
 
 Unable to get transaction details for {tx_hash}:
@@ -970,6 +1661,18 @@ Example: "Analyze transaction 0x123abc..."
 
     # Help message for other queries
     else:
+        # We already tried RAG at the beginning, use the result if it was useful
+        if isinstance(rag_result, dict) and "answer" in rag_result and rag_result["answer"].get("result"):
+            answer = rag_result["answer"]
+            confidence = rag_result.get("confidence", 0)
+
+            if confidence > 0.5:
+                return f"""🤖 **AI-Generated Response**
+
+{answer['result']}
+
+*Note: This response was generated using AI analysis with {confidence:.0%} confidence.*"""
+
         return """🚨 **Block Police Help**
 
 I can help you investigate blockchain activities. Try one of these queries:
@@ -1001,6 +1704,15 @@ I can help you investigate blockchain activities. Try one of these queries:
 9️⃣ **Search Tokens**
    Example: "Search for tokens named Uniswap"
 
+🔟 **Hedera Operations**
+   Example: "Check Hedera balance for 0.0.12345"
+   Example: "Get Hedera token balances for 0.0.12345"
+   Example: "Create a token on Hedera with name: My Token, symbol: MTK, supply: 1000000"
+   Example: "Transfer Hedera token: 0.0.1234 to: 0.0.5678 amount: 100"
+   Example: "Create NFT on Hedera with name: My Collection, symbol: MCNFT"
+   Example: "Mint NFT on Hedera token: 0.0.1234 metadata: ipfs://QmXyZ123"
+   Example: "Associate Hedera token: 0.0.1234"
+
 Just provide the appropriate address, ENS name, or transaction hash with your query."""
 
 # Add shutdown handler to cleanup clients
@@ -1008,8 +1720,8 @@ Just provide the appropriate address, ENS name, or transaction hash with your qu
 async def on_shutdown(ctx: Context):
     """Cleanup on agent shutdown"""
     for session_data in user_sessions.values():
-        if 'client' in session_data:
-            await session_data['client'].cleanup()
+        if 'manager' in session_data:
+            await session_data['manager'].cleanup()
 
 # Include chat protocol
 agent.include(chat_proto, publish_manifest=True)
