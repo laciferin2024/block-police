@@ -28,13 +28,6 @@ This agent uses:
 
 ## Installation
 
-1. Clone the repository:
-
-```bash
-git clone https://github.com/yourusername/block-police.git
-cd block-police
-```
-
 2. Create and activate a virtual environment:
 
 ```bash
@@ -62,7 +55,7 @@ pip install -r requirements.txt
 Start the agent:
 
 ```bash
-python block_police_agent.py
+python agent.py
 ```
 
 This will launch the agent and print its address. The agent will be discoverable on Fetch.ai's Agentverse.
